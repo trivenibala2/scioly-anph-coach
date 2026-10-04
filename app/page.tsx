@@ -1,12 +1,17 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useRef, useState } from "react";
+import Image from "next/image";
 import {
+  ArrowLeft,
+  ArrowRight,
   BookOpenCheck,
   Check,
   FileText,
   HeartPulse,
+  Image as ImageIcon,
   LoaderCircle,
+  RotateCcw,
   Sparkles,
   Upload,
   X,
@@ -17,22 +22,78 @@ type ExtractedPage = {
   text: string;
 };
 
-type LessonResult = {
-  lesson: string;
+type KeyTerm = {
+  term: string;
+  definition: string;
+};
+
+type LessonSection = {
+  heading: string;
+  paragraphs: string[];
+  keyTerms: KeyTerm[];
   sourcePages: number[];
 };
 
+type LessonResult = {
+  title: string;
+  intro: string;
+  sections: LessonSection[];
+  rememberThis: string[];
+  insufficientInformation: boolean;
+};
+
+type PageSnapshot = {
+  pageNumber: number;
+  dataUrl: string;
+  width: number;
+  height: number;
+};
+
 type WorkState = "empty" | "extracting" | "ready" | "generating";
+type StudyMode = "lesson" | "flashcards" | "test";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 80_000;
 
+function HighlightedParagraph({ text, terms }: { text: string; terms: KeyTerm[] }) {
+  const sortedTerms = [...terms]
+    .filter((item) => item.term.trim())
+    .sort((first, second) => second.term.length - first.term.length);
+  if (!sortedTerms.length) return <p>{text}</p>;
+
+  const expression = new RegExp(`(${sortedTerms.map(({ term }) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  return (
+    <p>
+      {text.split(expression).map((part, index) => {
+        const term = sortedTerms.find((item) => item.term.toLowerCase() === part.toLowerCase());
+        return term ? <mark key={`${part}-${index}`} title={term.definition}>{part}</mark> : part;
+      })}
+    </p>
+  );
+}
+
+function PageCitations({ pages }: { pages: number[] }) {
+  return (
+    <div className="lesson-citations" aria-label="Source pages">
+      {pages.map((pageNumber) => <span className="citation-chip" key={pageNumber}>PDF · page {pageNumber}</span>)}
+    </div>
+  );
+}
+
 export default function Home() {
   const fileInput = useRef<HTMLInputElement>(null);
+  const pdfBytes = useRef<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState("");
   const [pages, setPages] = useState<ExtractedPage[]>([]);
+  const [pageSnapshots, setPageSnapshots] = useState<PageSnapshot[]>([]);
   const [workState, setWorkState] = useState<WorkState>("empty");
   const [lesson, setLesson] = useState<LessonResult | null>(null);
+  const [studyMode, setStudyMode] = useState<StudyMode>("lesson");
+  const [flashcardIndex, setFlashcardIndex] = useState(0);
+  const [showFlashcardAnswer, setShowFlashcardAnswer] = useState(false);
+  const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [quizIndex, setQuizIndex] = useState(0);
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
 
@@ -51,6 +112,8 @@ export default function Home() {
 
     setFileName(file.name);
     setPages([]);
+    setPageSnapshots([]);
+    pdfBytes.current = null;
     setWorkState("extracting");
 
     try {
@@ -59,9 +122,9 @@ export default function Home() {
         "pdfjs-dist/build/pdf.worker.min.mjs",
         import.meta.url,
       ).toString();
-      const document = await pdfjs.getDocument({
-        data: new Uint8Array(await file.arrayBuffer()),
-      }).promise;
+      const fileBytes = await file.arrayBuffer();
+      pdfBytes.current = fileBytes.slice(0);
+      const document = await pdfjs.getDocument({ data: new Uint8Array(fileBytes) }).promise;
       const extractedPages: ExtractedPage[] = [];
 
       if (document.numPages > 200) {
@@ -98,7 +161,52 @@ export default function Home() {
           ? caughtError.message
           : "We couldn’t read that PDF. Try another file.",
       );
+      pdfBytes.current = null;
     }
+  }
+
+  async function renderCitedPages(pageNumbers: number[]) {
+    if (!pdfBytes.current || pageNumbers.length === 0) return [];
+
+    const pdfjs = await import("pdfjs-dist");
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/build/pdf.worker.min.mjs",
+      import.meta.url,
+    ).toString();
+    const document = await pdfjs.getDocument({ data: new Uint8Array(pdfBytes.current.slice(0)) }).promise;
+    const snapshots: PageSnapshot[] = [];
+
+    try {
+      for (const pageNumber of pageNumbers) {
+        if (pageNumber < 1 || pageNumber > document.numPages) continue;
+        const page = await document.getPage(pageNumber);
+        const originalViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(1, 720 / originalViewport.width, 880 / originalViewport.height);
+        const viewport = page.getViewport({ scale });
+        const canvas = window.document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext("2d");
+
+        if (context) {
+          await page.render({ canvasContext: context, viewport }).promise;
+          snapshots.push({
+            pageNumber,
+            dataUrl: canvas.toDataURL("image/jpeg", 0.78),
+            width: canvas.width,
+            height: canvas.height,
+          });
+        }
+
+        canvas.width = 0;
+        canvas.height = 0;
+        page.cleanup();
+      }
+    } finally {
+      await document.destroy();
+    }
+
+    return snapshots;
   }
 
   async function generateLesson() {
@@ -113,11 +221,24 @@ export default function Home() {
       });
       const result = (await response.json()) as LessonResult | { error?: string };
 
-      if (!response.ok || !("lesson" in result)) {
+      if (!response.ok || !("sections" in result)) {
         throw new Error("error" in result ? result.error : "We couldn’t create a lesson just now.");
       }
 
       setLesson(result);
+      setStudyMode("lesson");
+      setFlashcardIndex(0);
+      setShowFlashcardAnswer(false);
+      setQuizIndex(0);
+      const citedPages = [...new Set(result.sections.flatMap((section) => section.sourcePages))].slice(0, 8);
+      try {
+        setPageSnapshots(await renderCitedPages(citedPages));
+      } catch {
+        setPageSnapshots([]);
+      }
+      const termCount = result.sections.reduce((total, section) => total + section.keyTerms.length, 0);
+      setQuizAnswers(new Array(termCount).fill(-1));
+      setQuizSubmitted(false);
       setWorkState("ready");
     } catch (caughtError) {
       setError(
@@ -132,7 +253,13 @@ export default function Home() {
   function clearPdf() {
     setFileName("");
     setPages([]);
+    setPageSnapshots([]);
+    pdfBytes.current = null;
     setLesson(null);
+    setStudyMode("lesson");
+    setFlashcardIndex(0);
+    setQuizAnswers([]);
+    setQuizSubmitted(false);
     setError("");
     setWorkState("empty");
     if (fileInput.current) fileInput.current.value = "";
@@ -151,6 +278,20 @@ export default function Home() {
   }
 
   const pageCountLabel = `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
+  const practiceTerms = lesson
+    ? lesson.sections.flatMap((section) => section.keyTerms.map((keyTerm) => ({ ...keyTerm, sourcePages: section.sourcePages })))
+    : [];
+  const practiceQuestions = practiceTerms.map((term, index) => {
+    const otherTerms = practiceTerms.filter((item, itemIndex) => itemIndex !== index);
+    const choices = [term.term, ...otherTerms.slice(0, 3).map((item) => item.term)];
+    const correctIndex = index % choices.length;
+    const orderedChoices = [...choices.slice(correctIndex), ...choices.slice(0, correctIndex)];
+    return { ...term, choices: orderedChoices, correctIndex: 0 };
+  });
+  const quizScore = practiceQuestions.reduce(
+    (score, question, index) => score + (quizAnswers[index] === question.correctIndex ? 1 : 0),
+    0,
+  );
 
   return (
     <main className="app-shell">
@@ -260,14 +401,138 @@ export default function Home() {
 
             {lesson ? (
               <div className="lesson-result">
-                <div className="lesson-kicker"><BookOpenCheck size={16} /> ANATOMY &amp; PHYSIOLOGY</div>
-                <div className="lesson-text">{lesson.lesson}</div>
-                <div className="source-box">
-                  <span className="source-label">BUILT FROM YOUR PDF</span>
-                  <div className="source-pages">
-                    {lesson.sourcePages.map((pageNumber) => <span key={pageNumber}>Page {pageNumber}</span>)}
+                <div className="lesson-kicker"><BookOpenCheck size={16} /> SCIENCE OLYMPIAD · A&amp;P</div>
+                <h3 className="lesson-title">{lesson.title}</h3>
+                <p className="lesson-intro">{lesson.intro}</p>
+
+                {lesson.insufficientInformation ? (
+                  <div className="insufficient-note" role="status">
+                    <BookOpenCheck size={18} />
+                    <p>The lesson stays within your source. Add a packet with more detail to build out the teaching sections.</p>
                   </div>
-                </div>
+                ) : studyMode === "lesson" ? (
+                  <>
+                    <div className="teaching-sections">
+                      {lesson.sections.map((section, index) => (
+                        <article className="teaching-section" key={`${section.heading}-${index}`}>
+                          <div className="teaching-section-heading">
+                            <span>{String(index + 1).padStart(2, "0")}</span>
+                            <h4>{section.heading}</h4>
+                          </div>
+                          <div className="teaching-copy">
+                            {section.paragraphs.map((paragraph, paragraphIndex) => (
+                              <HighlightedParagraph key={`${section.heading}-${paragraphIndex}`} text={paragraph} terms={section.keyTerms} />
+                            ))}
+                          </div>
+                          {section.keyTerms.length > 0 && (
+                            <dl className="key-term-list">
+                              {section.keyTerms.map((keyTerm) => (
+                                <div className="key-term" key={`${section.heading}-${keyTerm.term}`}>
+                                  <dt>{keyTerm.term}</dt>
+                                  <dd>{keyTerm.definition}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
+                          <div className="section-source-row">
+                            <span className="source-label">IN YOUR PDF</span>
+                            <PageCitations pages={section.sourcePages} />
+                          </div>
+                          {section.sourcePages.some((pageNumber) => pageSnapshots.some((snapshot) => snapshot.pageNumber === pageNumber)) && (
+                            <div className="source-visuals">
+                              <div className="visual-heading"><ImageIcon size={14} /> From your packet</div>
+                              <div className="visual-grid">
+                                {section.sourcePages.slice(0, 2).map((pageNumber) => {
+                                  const snapshot = pageSnapshots.find((item) => item.pageNumber === pageNumber);
+                                  return snapshot ? (
+                                    <figure className="source-visual" key={`${section.heading}-${pageNumber}`}>
+                                      <Image
+                                        src={snapshot.dataUrl}
+                                        alt={`Uploaded PDF page ${pageNumber}`}
+                                        width={snapshot.width}
+                                        height={snapshot.height}
+                                        unoptimized
+                                      />
+                                      <figcaption>PDF page {pageNumber}</figcaption>
+                                    </figure>
+                                  ) : null;
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+
+                    {lesson.rememberThis.length > 0 && (
+                      <section className="remember-panel" aria-labelledby="remember-heading">
+                        <div className="remember-kicker"><Sparkles size={15} /> TAKE THIS WITH YOU</div>
+                        <h4 id="remember-heading">Remember This</h4>
+                        <ul>{lesson.rememberThis.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}</ul>
+                      </section>
+                    )}
+
+                    <div className="lesson-actions">
+                      <button className="button button-practice" type="button" onClick={() => { setStudyMode("flashcards"); setFlashcardIndex(0); setShowFlashcardAnswer(false); }} disabled={!practiceTerms.length}>
+                        <RotateCcw size={18} /> Practice Flashcards
+                      </button>
+                      <button className="button button-test" type="button" onClick={() => { setStudyMode("test"); setQuizIndex(0); setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizSubmitted(false); }} disabled={practiceQuestions.length < 2}>
+                        <Check size={18} /> Take Quick Test
+                      </button>
+                    </div>
+                  </>
+                ) : studyMode === "flashcards" && practiceTerms.length > 0 ? (
+                  <div className="practice-panel">
+                    <button className="back-to-lesson" type="button" onClick={() => setStudyMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
+                    <div className="practice-count">FLASHCARD {flashcardIndex + 1} <span>OF {practiceTerms.length}</span></div>
+                    <button className={`flashcard ${showFlashcardAnswer ? "flashcard-answer" : ""}`} type="button" onClick={() => setShowFlashcardAnswer((current) => !current)}>
+                      <span>{showFlashcardAnswer ? "DEFINITION" : "SCIENTIFIC TERM"}</span>
+                      <strong>{showFlashcardAnswer ? practiceTerms[flashcardIndex].definition : practiceTerms[flashcardIndex].term}</strong>
+                      <small>{showFlashcardAnswer ? "Tap to see the term" : "Tap to reveal the definition"}</small>
+                    </button>
+                    <PageCitations pages={practiceTerms[flashcardIndex].sourcePages} />
+                    <div className="practice-controls">
+                      <button className="icon-button" type="button" aria-label="Previous flashcard" title="Previous flashcard" onClick={() => { setFlashcardIndex((current) => (current + practiceTerms.length - 1) % practiceTerms.length); setShowFlashcardAnswer(false); }}><ArrowLeft size={18} /></button>
+                      <button className="button button-outline" type="button" onClick={() => setShowFlashcardAnswer((current) => !current)}>{showFlashcardAnswer ? "Show term" : "Show definition"}</button>
+                      <button className="icon-button" type="button" aria-label="Next flashcard" title="Next flashcard" onClick={() => { setFlashcardIndex((current) => (current + 1) % practiceTerms.length); setShowFlashcardAnswer(false); }}><ArrowRight size={18} /></button>
+                    </div>
+                  </div>
+                ) : studyMode === "test" && practiceQuestions.length >= 2 ? (
+                  <div className="practice-panel">
+                    <button className="back-to-lesson" type="button" onClick={() => setStudyMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
+                    {quizSubmitted ? (
+                      <div className="test-result">
+                        <div className="test-result-icon"><Check size={22} /></div>
+                        <div className="practice-count">QUICK TEST COMPLETE</div>
+                        <h4>{quizScore} / {practiceQuestions.length} correct</h4>
+                        <p>Review the lesson sections and key terms, then try again.</p>
+                        <button className="button button-outline" type="button" onClick={() => { setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizIndex(0); setQuizSubmitted(false); }}><RotateCcw size={15} /> Try again</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="practice-count">QUESTION {quizIndex + 1} <span>OF {practiceQuestions.length}</span></div>
+                        <h4 className="test-prompt">Which scientific term matches this description?</h4>
+                        <p className="test-definition">{practiceTerms[quizIndex].definition}</p>
+                        <div className="test-choices">
+                          {practiceQuestions[quizIndex].choices.map((choice, choiceIndex) => (
+                            <button className={`test-choice ${quizAnswers[quizIndex] === choiceIndex ? "test-choice-selected" : ""}`} type="button" key={`${quizIndex}-${choice}`} onClick={() => setQuizAnswers((answers) => answers.map((answer, answerIndex) => answerIndex === quizIndex ? choiceIndex : answer))}>
+                              <span>{String.fromCharCode(65 + choiceIndex)}</span>{choice}
+                            </button>
+                          ))}
+                        </div>
+                        <PageCitations pages={practiceQuestions[quizIndex].sourcePages} />
+                        <div className="practice-controls">
+                          <button className="button button-outline" type="button" disabled={quizIndex === 0} onClick={() => setQuizIndex((current) => Math.max(0, current - 1))}><ArrowLeft size={15} /> Previous</button>
+                          {quizIndex < practiceQuestions.length - 1 ? (
+                            <button className="button button-test" type="button" disabled={quizAnswers[quizIndex] === -1} onClick={() => setQuizIndex((current) => Math.min(practiceQuestions.length - 1, current + 1))}>Next <ArrowRight size={15} /></button>
+                          ) : (
+                            <button className="button button-test" type="button" disabled={quizAnswers.some((answer) => answer === -1)} onClick={() => setQuizSubmitted(true)}>Check answers <Check size={15} /></button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="lesson-empty">
