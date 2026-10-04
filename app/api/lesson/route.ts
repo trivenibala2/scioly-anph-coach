@@ -16,6 +16,17 @@ type StudyFlashcard = {
   sourcePages: number[];
 };
 
+type QuickTestQuestion = {
+  topic: string;
+  concept: string;
+  difficulty: "easy" | "medium" | "challenging";
+  question: string;
+  options: string[];
+  correctAnswer: number;
+  explanation: string;
+  sourcePages: number[];
+};
+
 type EvidenceQuote = {
   pageNumber: number;
   quote: string;
@@ -34,6 +45,7 @@ type StructuredLesson = {
   sections: LessonSection[];
   rememberThis: string[];
   flashcards: StudyFlashcard[];
+  quickTestQuestions: QuickTestQuestion[];
   insufficientInformation: boolean;
 };
 
@@ -48,6 +60,18 @@ type GeneratedLesson = {
     answer: string;
     sourcePages: number[];
     evidence: EvidenceQuote[];
+  }>;
+  quickTestQuestions: Array<{
+    topic: string;
+    concept: string;
+    difficulty: string;
+    question: string;
+    options: string[];
+    correctAnswer: number;
+    explanation: string;
+    sourcePages: number[];
+    questionEvidence: EvidenceQuote[];
+    explanationEvidence: EvidenceQuote[];
   }>;
   insufficientInformation: boolean;
 };
@@ -160,7 +184,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           systemInstruction: {
             parts: [{
-              text: "You are a careful Science Olympiad Anatomy & Physiology teacher. The uploaded PDF text is the only authoritative source. Never use outside knowledge or fill gaps. If a PDF page only names an organ or term, do not add its function, definition, location, or other facts unless the PDF states them. Preserve scientific terminology and explain only supported details at an age-appropriate level. Do not add importance claims, adjectives such as vital or crucial, or descriptions absent from the source. Write a concise lesson for about five minutes: a short intro, then 3 to 5 teaching sections with natural explanatory paragraphs, not bullets or a wall of text. Include important terms only when the PDF supports their definitions. For the intro, every paragraph, every key-term definition, and every Remember This point, include an evidence quote copied exactly from a supplied page and its page number. Each quote must directly support all factual claims in that item; if no quote supports it, omit the item. The server checks these quotes against the PDF. Every section must cite the pages supporting its content. End with 2 to 4 short Remember This points. Also create 8 to 10 high-value flashcards for this lesson when the source supports that many distinct concepts. Each card tests one important concept, has a short scientifically accurate answer, does not repeat another card, and includes source page numbers plus exact evidence quotes for both its question and answer. Build cards from the lesson and supplied PDF together; never pad the set with unsupported or trivial facts. If the PDF does not provide enough information, set insufficientInformation to true, explicitly say in intro that the uploaded material does not provide enough information, and leave sections, rememberThis, and flashcards empty. Return only JSON matching the schema; never HTML or Markdown.",
+              text: "You are a careful Science Olympiad Anatomy & Physiology teacher. The uploaded PDF text is the only authoritative source. Never use outside knowledge or fill gaps. If a PDF page only names an organ or term, do not add its function, definition, location, or other facts unless the PDF states them. Preserve scientific terminology and explain only supported details at an age-appropriate level. Do not add importance claims, adjectives such as vital or crucial, or descriptions absent from the source. Write a concise lesson for about five minutes: a short intro, then 3 to 5 teaching sections with natural explanatory paragraphs, not bullets or a wall of text. Include important terms only when the PDF supports their definitions. For the intro, every paragraph, every key-term definition, and every Remember This point, include an evidence quote copied exactly from a supplied page and its page number. Each quote must directly support all factual claims in that item; if no quote supports it, omit the item. The server checks these quotes against the PDF. Every section must cite the pages supporting its content. End with 2 to 4 short Remember This points. Also create 8 to 10 high-value flashcards for this lesson when the source supports that many distinct concepts. Each card tests one important concept, has a short scientifically accurate answer, does not repeat another card, and includes source page numbers plus exact evidence quotes for both its question and answer. Build cards from the lesson and supplied PDF together; never pad the set with unsupported or trivial facts. Create exactly five multiple-choice questions for a separate Quick Test using only supported facts in the lesson and PDF. Test understanding, mix easy, medium, and challenging, use four distinct plausible options, one correct option, and avoid ambiguity and repeated concepts. Give every question a topic and specific concept label. Include a brief explanation and separate exact evidence quotes for both question and explanation, with source pages present for both. If five distinct questions cannot be supported, return an empty quickTestQuestions array instead of inventing. If the PDF does not provide enough information, set insufficientInformation to true, explicitly say in intro that the uploaded material does not provide enough information, and leave sections, rememberThis, flashcards, and quickTestQuestions empty. Return only JSON matching the schema; never HTML or Markdown.",
             }],
           },
           contents: [{ role: "user", parts: [{ text: `Make the lesson from this extracted PDF text:\n\n${sourceText}` }] }],
@@ -231,9 +255,28 @@ export async function POST(request: Request) {
                     required: ["question", "answer", "sourcePages", "evidence"],
                   },
                 },
+                quickTestQuestions: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      topic: { type: "STRING" },
+                      concept: { type: "STRING" },
+                      difficulty: { type: "STRING", enum: ["easy", "medium", "challenging"] },
+                      question: { type: "STRING" },
+                      options: { type: "ARRAY", items: { type: "STRING" } },
+                      correctAnswer: { type: "INTEGER" },
+                      explanation: { type: "STRING" },
+                      sourcePages: { type: "ARRAY", items: { type: "INTEGER" } },
+                      questionEvidence: { type: "ARRAY", items: evidenceSchema },
+                      explanationEvidence: { type: "ARRAY", items: evidenceSchema },
+                    },
+                    required: ["topic", "concept", "difficulty", "question", "options", "correctAnswer", "explanation", "sourcePages", "questionEvidence", "explanationEvidence"],
+                  },
+                },
                 insufficientInformation: { type: "BOOLEAN" },
               },
-              required: ["title", "intro", "introEvidence", "sections", "rememberThis", "flashcards", "insufficientInformation"],
+              required: ["title", "intro", "introEvidence", "sections", "rememberThis", "flashcards", "quickTestQuestions", "insufficientInformation"],
             },
           },
         }),
@@ -257,6 +300,7 @@ export async function POST(request: Request) {
       typeof generated.title !== "string" || typeof generated.intro !== "string" ||
       !Array.isArray(generated.sections) || !Array.isArray(generated.rememberThis) ||
       !Array.isArray(generated.flashcards) ||
+      !Array.isArray(generated.quickTestQuestions) ||
       typeof generated.insufficientInformation !== "boolean"
     ) {
       throw new Error("Gemini returned an invalid lesson structure.");
@@ -326,12 +370,56 @@ export async function POST(request: Request) {
       (candidate) => normalizeEvidenceText(candidate.question) === normalizeEvidenceText(card.question),
     ) === index).slice(0, 10);
 
+    const generatedQuestions = generated.insufficientInformation ? [] : generated.quickTestQuestions.flatMap((item) => {
+      if (
+        typeof item !== "object" || item === null || typeof item.topic !== "string" ||
+        typeof item.concept !== "string" ||
+        !(item.difficulty === "easy" || item.difficulty === "medium" || item.difficulty === "challenging") ||
+        typeof item.question !== "string" || !Array.isArray(item.options) ||
+        !item.options.every((option) => typeof option === "string") || item.options.length !== 4 ||
+        typeof item.correctAnswer !== "number" || !Number.isInteger(item.correctAnswer) ||
+        item.correctAnswer < 0 || item.correctAnswer > 3 || typeof item.explanation !== "string" ||
+        !Array.isArray(item.sourcePages)
+      ) return [];
+
+      const questionPages = verifiedEvidencePages(item.questionEvidence, sourceByPage);
+      const explanationPages = verifiedEvidencePages(item.explanationEvidence, sourceByPage);
+      const evidencePages = new Set([...questionPages, ...explanationPages]);
+      const sourcePages = [...new Set(item.sourcePages.filter(
+        (pageNumber): pageNumber is number => typeof pageNumber === "number" &&
+          Number.isInteger(pageNumber) && evidencePages.has(pageNumber),
+      ))].sort((first, second) => first - second);
+      const options = item.options.map((option) => option.trim());
+
+      if (
+        !item.topic.trim() || !item.concept.trim() || !item.question.trim() ||
+        !item.explanation.trim() || item.question.length > 500 || item.explanation.length > 800 ||
+        !questionPages.length || !explanationPages.length || !sourcePages.length ||
+        options.some((option) => !option) || new Set(options.map(normalizeEvidenceText)).size !== 4
+      ) return [];
+
+      return [{
+        topic: item.topic.trim(),
+        concept: item.concept.trim(),
+        difficulty: item.difficulty as QuickTestQuestion["difficulty"],
+        question: item.question.trim(),
+        options,
+        correctAnswer: item.correctAnswer,
+        explanation: item.explanation.trim(),
+        sourcePages,
+      }];
+    }).filter((question, index, questions) => questions.findIndex(
+      (candidate) => normalizeEvidenceText(candidate.concept) === normalizeEvidenceText(question.concept),
+    ) === index).slice(0, 5);
+    const quickTestQuestions = generatedQuestions.length === 5 ? generatedQuestions : [];
+
     const lesson: StructuredLesson = {
       title: generated.title.trim(),
       intro: generated.intro.trim(),
       sections,
       rememberThis,
       flashcards,
+      quickTestQuestions,
       insufficientInformation: generated.insufficientInformation,
     };
 
@@ -344,6 +432,7 @@ export async function POST(request: Request) {
         sections: [],
         rememberThis: [],
         flashcards: [],
+        quickTestQuestions: [],
         insufficientInformation: true,
       });
     }
@@ -354,6 +443,7 @@ export async function POST(request: Request) {
       sections: lesson.sections,
       rememberThis: lesson.rememberThis,
       flashcards: lesson.flashcards,
+      quickTestQuestions: lesson.quickTestQuestions,
       insufficientInformation: lesson.insufficientInformation,
     });
   } catch (caughtError) {
