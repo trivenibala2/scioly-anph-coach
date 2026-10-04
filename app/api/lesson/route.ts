@@ -92,6 +92,7 @@ export async function POST(request: Request) {
               type: "OBJECT",
               properties: {
                 lesson: { type: "STRING" },
+                sourcePages: { type: "ARRAY", items: { type: "INTEGER" } },
               },
               required: ["lesson", "sourcePages"],
             },
