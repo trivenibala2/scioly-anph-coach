@@ -5,7 +5,7 @@ A no-login Science Olympiad Anatomy & Physiology coach. Students add a text-base
 ## Setup
 
 1. Install dependencies with `npm install`.
-2. Copy `.env.example` to `.env.local` and add a Gemini API key as `GEMINI_API_KEY`.
+2. Create `.env.local` in the project root and add `GEMINI_API_KEY=your_actual_key`.
 3. Start the app with `npm run dev` and open [http://localhost:3000](http://localhost:3000).
 
 The Gemini key must stay in the server environment. Do not expose it as a `NEXT_PUBLIC_` variable. Scanned/image-only PDFs are not supported because OCR is not included.
@@ -38,6 +38,9 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Import this repository as a project in Vercel.
+2. Open **Project Settings → Environment Variables**.
+3. Add a variable named `GEMINI_API_KEY` and paste the key into its value field. Select the environments where it should be available.
+4. Save the variable and redeploy the project so the server route receives it.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+No `vercel.json` entry is needed. The lesson API reads the key on the server; never prefix it with `NEXT_PUBLIC_` or put its value in source control. For local development, use the ignored `.env.local` file instead.
