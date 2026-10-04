@@ -10,6 +10,12 @@ type LessonSection = {
   sourcePages: number[];
 };
 
+type StudyFlashcard = {
+  question: string;
+  answer: string;
+  sourcePages: number[];
+};
+
 type EvidenceQuote = {
   pageNumber: number;
   quote: string;
@@ -27,6 +33,7 @@ type StructuredLesson = {
   intro: string;
   sections: LessonSection[];
   rememberThis: string[];
+  flashcards: StudyFlashcard[];
   insufficientInformation: boolean;
 };
 
@@ -36,6 +43,12 @@ type GeneratedLesson = {
   introEvidence: EvidenceQuote[];
   sections: GeneratedSection[];
   rememberThis: Array<{ text: string; evidence: EvidenceQuote[] }>;
+  flashcards: Array<{
+    question: string;
+    answer: string;
+    sourcePages: number[];
+    evidence: EvidenceQuote[];
+  }>;
   insufficientInformation: boolean;
 };
 
@@ -147,7 +160,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           systemInstruction: {
             parts: [{
-              text: "You are a careful Science Olympiad Anatomy & Physiology teacher. The uploaded PDF text is the only authoritative source. Never use outside knowledge or fill gaps. If a PDF page only names an organ or term, do not add its function, definition, location, or other facts unless the PDF states them. Preserve scientific terminology and explain only supported details at an age-appropriate level. Do not add importance claims, adjectives such as vital or crucial, or descriptions absent from the source. Write a concise lesson for about five minutes: a short intro, then 3 to 5 teaching sections with natural explanatory paragraphs, not bullets or a wall of text. Include important terms only when the PDF supports their definitions. For the intro, every paragraph, every key-term definition, and every Remember This point, include an evidence quote copied exactly from a supplied page and its page number. Each quote must directly support all factual claims in that item; if no quote supports it, omit the item. The server checks these quotes against the PDF. Every section must cite the pages supporting its content. End with 2 to 4 short Remember This points. If the PDF does not provide enough information, set insufficientInformation to true, explicitly say in intro that the uploaded material does not provide enough information, and leave sections and rememberThis empty. Return only JSON matching the schema; never HTML or Markdown.",
+              text: "You are a careful Science Olympiad Anatomy & Physiology teacher. The uploaded PDF text is the only authoritative source. Never use outside knowledge or fill gaps. If a PDF page only names an organ or term, do not add its function, definition, location, or other facts unless the PDF states them. Preserve scientific terminology and explain only supported details at an age-appropriate level. Do not add importance claims, adjectives such as vital or crucial, or descriptions absent from the source. Write a concise lesson for about five minutes: a short intro, then 3 to 5 teaching sections with natural explanatory paragraphs, not bullets or a wall of text. Include important terms only when the PDF supports their definitions. For the intro, every paragraph, every key-term definition, and every Remember This point, include an evidence quote copied exactly from a supplied page and its page number. Each quote must directly support all factual claims in that item; if no quote supports it, omit the item. The server checks these quotes against the PDF. Every section must cite the pages supporting its content. End with 2 to 4 short Remember This points. Also create 8 to 10 high-value flashcards for this lesson when the source supports that many distinct concepts. Each card tests one important concept, has a short scientifically accurate answer, does not repeat another card, and includes source page numbers plus exact evidence quotes for both its question and answer. Build cards from the lesson and supplied PDF together; never pad the set with unsupported or trivial facts. If the PDF does not provide enough information, set insufficientInformation to true, explicitly say in intro that the uploaded material does not provide enough information, and leave sections, rememberThis, and flashcards empty. Return only JSON matching the schema; never HTML or Markdown.",
             }],
           },
           contents: [{ role: "user", parts: [{ text: `Make the lesson from this extracted PDF text:\n\n${sourceText}` }] }],
@@ -205,9 +218,22 @@ export async function POST(request: Request) {
                     required: ["text", "evidence"],
                   },
                 },
+                flashcards: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      question: { type: "STRING" },
+                      answer: { type: "STRING" },
+                      sourcePages: { type: "ARRAY", items: { type: "INTEGER" } },
+                      evidence: { type: "ARRAY", items: evidenceSchema },
+                    },
+                    required: ["question", "answer", "sourcePages", "evidence"],
+                  },
+                },
                 insufficientInformation: { type: "BOOLEAN" },
               },
-              required: ["title", "intro", "introEvidence", "sections", "rememberThis", "insufficientInformation"],
+              required: ["title", "intro", "introEvidence", "sections", "rememberThis", "flashcards", "insufficientInformation"],
             },
           },
         }),
@@ -230,6 +256,7 @@ export async function POST(request: Request) {
     if (
       typeof generated.title !== "string" || typeof generated.intro !== "string" ||
       !Array.isArray(generated.sections) || !Array.isArray(generated.rememberThis) ||
+      !Array.isArray(generated.flashcards) ||
       typeof generated.insufficientInformation !== "boolean"
     ) {
       throw new Error("Gemini returned an invalid lesson structure.");
@@ -278,19 +305,47 @@ export async function POST(request: Request) {
       return verifiedEvidencePages(point.evidence, sourceByPage).length ? [point.text.trim()] : [];
     }).slice(0, 4);
 
+    const flashcards = generated.insufficientInformation ? [] : generated.flashcards.flatMap((item) => {
+      if (
+        typeof item !== "object" || item === null || typeof item.question !== "string" ||
+        typeof item.answer !== "string" || !Array.isArray(item.sourcePages)
+      ) return [];
+
+      const evidencePages = verifiedEvidencePages(item.evidence, sourceByPage);
+      const sourcePages = [...new Set(item.sourcePages.filter(
+        (pageNumber): pageNumber is number => typeof pageNumber === "number" &&
+          Number.isInteger(pageNumber) && evidencePages.includes(pageNumber),
+      ))].sort((first, second) => first - second);
+      if (
+        item.question.trim().length < 8 || item.answer.trim().length < 3 ||
+        !sourcePages.length || item.question.length > 260 || item.answer.length > 500
+      ) return [];
+
+      return [{ question: item.question.trim(), answer: item.answer.trim(), sourcePages }];
+    }).filter((card, index, cards) => cards.findIndex(
+      (candidate) => normalizeEvidenceText(candidate.question) === normalizeEvidenceText(card.question),
+    ) === index).slice(0, 10);
+
     const lesson: StructuredLesson = {
       title: generated.title.trim(),
       intro: generated.intro.trim(),
       sections,
       rememberThis,
+      flashcards,
       insufficientInformation: generated.insufficientInformation,
     };
 
-    if (
-      !lesson.title || !lesson.intro ||
-      (!lesson.insufficientInformation && (!introEvidence.length || !lesson.sections.length))
-    ) {
-      throw new Error("Gemini returned incomplete or unsupported lesson content.");
+    if (!lesson.title || !lesson.intro) throw new Error("Gemini returned an incomplete lesson.");
+
+    if (!lesson.insufficientInformation && (!introEvidence.length || !lesson.sections.length)) {
+      return Response.json({
+        title: "More source detail needed",
+        intro: "The uploaded material does not provide enough directly verifiable information to build a cited lesson. Try a text-based packet with more explanation.",
+        sections: [],
+        rememberThis: [],
+        flashcards: [],
+        insufficientInformation: true,
+      });
     }
 
     return Response.json({
@@ -298,9 +353,14 @@ export async function POST(request: Request) {
       intro: lesson.intro,
       sections: lesson.sections,
       rememberThis: lesson.rememberThis,
+      flashcards: lesson.flashcards,
       insufficientInformation: lesson.insufficientInformation,
     });
-  } catch {
+  } catch (caughtError) {
+    console.error(
+      "A&P lesson generation failed:",
+      caughtError instanceof Error ? caughtError.message : "Unknown response error",
+    );
     return Response.json({ error: "We couldn’t create a lesson just now. Please try again." }, { status: 502 });
   }
 }

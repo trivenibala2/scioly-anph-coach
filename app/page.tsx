@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useRef, useState, useSyncExternalStore } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,30 +17,22 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import {
+  clearStudySession,
+  getStudySessionMode,
+  getServerStudySessionSnapshot,
+  getStudySessionSnapshot,
+  isLessonResult,
+  restoreStudySession,
+  saveStudySession,
+  setStudySessionMode,
+  subscribeToStudySession,
+  type KeyTerm,
+} from "./study-session";
 
 type ExtractedPage = {
   pageNumber: number;
   text: string;
-};
-
-type KeyTerm = {
-  term: string;
-  definition: string;
-};
-
-type LessonSection = {
-  heading: string;
-  paragraphs: string[];
-  keyTerms: KeyTerm[];
-  sourcePages: number[];
-};
-
-type LessonResult = {
-  title: string;
-  intro: string;
-  sections: LessonSection[];
-  rememberThis: string[];
-  insufficientInformation: boolean;
 };
 
 type PageSnapshot = {
@@ -50,7 +43,6 @@ type PageSnapshot = {
 };
 
 type WorkState = "empty" | "extracting" | "ready" | "generating";
-type StudyMode = "lesson" | "flashcards" | "test";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 80_000;
@@ -83,14 +75,17 @@ function PageCitations({ pages }: { pages: number[] }) {
 export default function Home() {
   const fileInput = useRef<HTMLInputElement>(null);
   const pdfBytes = useRef<ArrayBuffer | null>(null);
+  const storedSession = useSyncExternalStore(
+    subscribeToStudySession,
+    getStudySessionSnapshot,
+    getServerStudySessionSnapshot,
+  );
+  const lesson = restoreStudySession(storedSession);
+  const studyMode = getStudySessionMode(storedSession);
   const [fileName, setFileName] = useState("");
   const [pages, setPages] = useState<ExtractedPage[]>([]);
   const [pageSnapshots, setPageSnapshots] = useState<PageSnapshot[]>([]);
   const [workState, setWorkState] = useState<WorkState>("empty");
-  const [lesson, setLesson] = useState<LessonResult | null>(null);
-  const [studyMode, setStudyMode] = useState<StudyMode>("lesson");
-  const [flashcardIndex, setFlashcardIndex] = useState(0);
-  const [showFlashcardAnswer, setShowFlashcardAnswer] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizIndex, setQuizIndex] = useState(0);
@@ -99,7 +94,6 @@ export default function Home() {
 
   async function readPdf(file: File) {
     setError("");
-    setLesson(null);
 
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       setError("Choose a PDF file to get started.");
@@ -110,6 +104,7 @@ export default function Home() {
       return;
     }
 
+    clearStudySession();
     setFileName(file.name);
     setPages([]);
     setPageSnapshots([]);
@@ -219,16 +214,22 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pages }),
       });
-      const result = (await response.json()) as LessonResult | { error?: string };
+      const result: unknown = await response.json();
 
-      if (!response.ok || !("sections" in result)) {
-        throw new Error("error" in result ? result.error : "We couldn’t create a lesson just now.");
+      if (!response.ok || !isLessonResult(result)) {
+        throw new Error(
+          typeof result === "object" && result !== null && "error" in result && typeof result.error === "string"
+            ? result.error
+            : "We couldn’t create a lesson just now.",
+        );
       }
 
-      setLesson(result);
-      setStudyMode("lesson");
-      setFlashcardIndex(0);
-      setShowFlashcardAnswer(false);
+      try {
+        saveStudySession(result);
+      } catch {
+        throw new Error("Your browser couldn’t save this study session for flashcards. Check that session storage is available.");
+      }
+
       setQuizIndex(0);
       const citedPages = [...new Set(result.sections.flatMap((section) => section.sourcePages))].slice(0, 8);
       try {
@@ -255,9 +256,7 @@ export default function Home() {
     setPages([]);
     setPageSnapshots([]);
     pdfBytes.current = null;
-    setLesson(null);
-    setStudyMode("lesson");
-    setFlashcardIndex(0);
+    clearStudySession();
     setQuizAnswers([]);
     setQuizSubmitted(false);
     setError("");
@@ -284,12 +283,17 @@ export default function Home() {
   const practiceQuestions = practiceTerms.map((term, index) => {
     const otherTerms = practiceTerms.filter((item, itemIndex) => itemIndex !== index);
     const choices = [term.term, ...otherTerms.slice(0, 3).map((item) => item.term)];
-    const correctIndex = index % choices.length;
-    const orderedChoices = [...choices.slice(correctIndex), ...choices.slice(0, correctIndex)];
-    return { ...term, choices: orderedChoices, correctIndex: 0 };
+    const rotation = index % choices.length;
+    const orderedChoices = [...choices.slice(rotation), ...choices.slice(0, rotation)];
+    return { ...term, choices: orderedChoices, correctIndex: (choices.length - rotation) % choices.length };
   });
+  const currentQuizAnswers = practiceQuestions.map((_, index) => quizAnswers[index] ?? -1);
+  const currentQuestion = practiceQuestions[quizIndex];
+  const selectedQuizAnswer = currentQuizAnswers[quizIndex] ?? -1;
+  const selectedQuizTerm = practiceTerms.find((term) => term.term === currentQuestion?.choices[selectedQuizAnswer]);
+  const selectedAnswerIsCorrect = currentQuestion !== undefined && selectedQuizAnswer === currentQuestion.correctIndex;
   const quizScore = practiceQuestions.reduce(
-    (score, question, index) => score + (quizAnswers[index] === question.correctIndex ? 1 : 0),
+    (score, question, index) => score + (currentQuizAnswers[index] === question.correctIndex ? 1 : 0),
     0,
   );
 
@@ -473,33 +477,23 @@ export default function Home() {
                     )}
 
                     <div className="lesson-actions">
-                      <button className="button button-practice" type="button" onClick={() => { setStudyMode("flashcards"); setFlashcardIndex(0); setShowFlashcardAnswer(false); }} disabled={!practiceTerms.length}>
-                        <RotateCcw size={18} /> Practice Flashcards
-                      </button>
-                      <button className="button button-test" type="button" onClick={() => { setStudyMode("test"); setQuizIndex(0); setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizSubmitted(false); }} disabled={practiceQuestions.length < 2}>
+                      {lesson.flashcards.length > 0 ? (
+                        <Link className="button button-practice" href="/flashcards">
+                          <RotateCcw size={18} /> Practice Flashcards <span className="card-count">{lesson.flashcards.length}</span>
+                        </Link>
+                      ) : (
+                        <button className="button button-practice" type="button" disabled title="No source-supported flashcards could be made from this packet.">
+                          <RotateCcw size={18} /> Practice Flashcards
+                        </button>
+                      )}
+                      <button id="quick-test" className="button button-test" type="button" onClick={() => { setStudySessionMode("test"); setQuizIndex(0); setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizSubmitted(false); }} disabled={practiceQuestions.length < 2}>
                         <Check size={18} /> Take Quick Test
                       </button>
                     </div>
                   </>
-                ) : studyMode === "flashcards" && practiceTerms.length > 0 ? (
-                  <div className="practice-panel">
-                    <button className="back-to-lesson" type="button" onClick={() => setStudyMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
-                    <div className="practice-count">FLASHCARD {flashcardIndex + 1} <span>OF {practiceTerms.length}</span></div>
-                    <button className={`flashcard ${showFlashcardAnswer ? "flashcard-answer" : ""}`} type="button" onClick={() => setShowFlashcardAnswer((current) => !current)}>
-                      <span>{showFlashcardAnswer ? "DEFINITION" : "SCIENTIFIC TERM"}</span>
-                      <strong>{showFlashcardAnswer ? practiceTerms[flashcardIndex].definition : practiceTerms[flashcardIndex].term}</strong>
-                      <small>{showFlashcardAnswer ? "Tap to see the term" : "Tap to reveal the definition"}</small>
-                    </button>
-                    <PageCitations pages={practiceTerms[flashcardIndex].sourcePages} />
-                    <div className="practice-controls">
-                      <button className="icon-button" type="button" aria-label="Previous flashcard" title="Previous flashcard" onClick={() => { setFlashcardIndex((current) => (current + practiceTerms.length - 1) % practiceTerms.length); setShowFlashcardAnswer(false); }}><ArrowLeft size={18} /></button>
-                      <button className="button button-outline" type="button" onClick={() => setShowFlashcardAnswer((current) => !current)}>{showFlashcardAnswer ? "Show term" : "Show definition"}</button>
-                      <button className="icon-button" type="button" aria-label="Next flashcard" title="Next flashcard" onClick={() => { setFlashcardIndex((current) => (current + 1) % practiceTerms.length); setShowFlashcardAnswer(false); }}><ArrowRight size={18} /></button>
-                    </div>
-                  </div>
                 ) : studyMode === "test" && practiceQuestions.length >= 2 ? (
                   <div className="practice-panel">
-                    <button className="back-to-lesson" type="button" onClick={() => setStudyMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
+                    <button className="back-to-lesson" type="button" onClick={() => setStudySessionMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
                     {quizSubmitted ? (
                       <div className="test-result">
                         <div className="test-result-icon"><Check size={22} /></div>
@@ -515,18 +509,39 @@ export default function Home() {
                         <p className="test-definition">{practiceTerms[quizIndex].definition}</p>
                         <div className="test-choices">
                           {practiceQuestions[quizIndex].choices.map((choice, choiceIndex) => (
-                            <button className={`test-choice ${quizAnswers[quizIndex] === choiceIndex ? "test-choice-selected" : ""}`} type="button" key={`${quizIndex}-${choice}`} onClick={() => setQuizAnswers((answers) => answers.map((answer, answerIndex) => answerIndex === quizIndex ? choiceIndex : answer))}>
+                            <button
+                              className={`test-choice ${selectedQuizAnswer === choiceIndex ? selectedAnswerIsCorrect ? "test-choice-correct" : "test-choice-incorrect" : ""}`}
+                              type="button"
+                              key={`${quizIndex}-${choice}`}
+                              onClick={() => setQuizAnswers(currentQuizAnswers.map((answer, answerIndex) => answerIndex === quizIndex ? choiceIndex : answer))}
+                            >
                               <span>{String.fromCharCode(65 + choiceIndex)}</span>{choice}
                             </button>
                           ))}
                         </div>
+                        {selectedQuizAnswer !== -1 && currentQuestion && (
+                          <div className={`test-feedback ${selectedAnswerIsCorrect ? "test-feedback-correct" : "test-feedback-incorrect"}`} role={selectedAnswerIsCorrect ? "status" : "alert"}>
+                            <span className="test-feedback-mark">{selectedAnswerIsCorrect ? <Check size={17} /> : <X size={17} />}</span>
+                            <div>
+                              <strong>{selectedAnswerIsCorrect ? "Correct!" : "Not quite."}</strong>
+                              <p>
+                                {selectedAnswerIsCorrect
+                                  ? `${currentQuestion.term}: ${currentQuestion.definition}`
+                                  : `The correct answer is ${currentQuestion.term}: ${currentQuestion.definition} Your choice, ${selectedQuizTerm?.term ?? currentQuestion.choices[selectedQuizAnswer]}, refers to ${selectedQuizTerm?.definition ?? "a different term"}, which does not match this description.`}
+                              </p>
+                              {!selectedAnswerIsCorrect && selectedQuizTerm && (
+                                <PageCitations pages={[...new Set([...currentQuestion.sourcePages, ...selectedQuizTerm.sourcePages])]} />
+                              )}
+                            </div>
+                          </div>
+                        )}
                         <PageCitations pages={practiceQuestions[quizIndex].sourcePages} />
                         <div className="practice-controls">
                           <button className="button button-outline" type="button" disabled={quizIndex === 0} onClick={() => setQuizIndex((current) => Math.max(0, current - 1))}><ArrowLeft size={15} /> Previous</button>
                           {quizIndex < practiceQuestions.length - 1 ? (
-                            <button className="button button-test" type="button" disabled={quizAnswers[quizIndex] === -1} onClick={() => setQuizIndex((current) => Math.min(practiceQuestions.length - 1, current + 1))}>Next <ArrowRight size={15} /></button>
+                            <button className="button button-test" type="button" disabled={currentQuizAnswers[quizIndex] === -1} onClick={() => setQuizIndex((current) => Math.min(practiceQuestions.length - 1, current + 1))}>Next <ArrowRight size={15} /></button>
                           ) : (
-                            <button className="button button-test" type="button" disabled={quizAnswers.some((answer) => answer === -1)} onClick={() => setQuizSubmitted(true)}>Check answers <Check size={15} /></button>
+                            <button className="button button-test" type="button" disabled={currentQuizAnswers.some((answer) => answer === -1)} onClick={() => setQuizSubmitted(true)}>Check answers <Check size={15} /></button>
                           )}
                         </div>
                       </>
