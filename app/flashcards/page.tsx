@@ -93,7 +93,7 @@ export default function FlashcardsPage() {
             </div>
 
             <div className="completion-actions">
-              <Link className="button button-test" href="/?study=test#lesson-heading" onClick={() => setStudySessionMode("test")}>
+              <Link className="button button-test" href="/test">
                 Take Quick Test <ArrowRight size={17} />
               </Link>
               <Link className="button button-outline" href="/?study=lesson#lesson-heading" onClick={() => setStudySessionMode("lesson")}>

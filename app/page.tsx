@@ -4,8 +4,6 @@ import { ChangeEvent, DragEvent, useRef, useState, useSyncExternalStore } from "
 import Image from "next/image";
 import Link from "next/link";
 import {
-  ArrowLeft,
-  ArrowRight,
   BookOpenCheck,
   Check,
   FileText,
@@ -19,13 +17,11 @@ import {
 } from "lucide-react";
 import {
   clearStudySession,
-  getStudySessionMode,
   getServerStudySessionSnapshot,
   getStudySessionSnapshot,
   isLessonResult,
   restoreStudySession,
   saveStudySession,
-  setStudySessionMode,
   subscribeToStudySession,
   type KeyTerm,
 } from "./study-session";
@@ -81,14 +77,10 @@ export default function Home() {
     getServerStudySessionSnapshot,
   );
   const lesson = restoreStudySession(storedSession);
-  const studyMode = getStudySessionMode(storedSession);
   const [fileName, setFileName] = useState("");
   const [pages, setPages] = useState<ExtractedPage[]>([]);
   const [pageSnapshots, setPageSnapshots] = useState<PageSnapshot[]>([]);
   const [workState, setWorkState] = useState<WorkState>("empty");
-  const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
-  const [quizSubmitted, setQuizSubmitted] = useState(false);
-  const [quizIndex, setQuizIndex] = useState(0);
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
 
@@ -230,16 +222,12 @@ export default function Home() {
         throw new Error("Your browser couldn’t save this study session for flashcards. Check that session storage is available.");
       }
 
-      setQuizIndex(0);
       const citedPages = [...new Set(result.sections.flatMap((section) => section.sourcePages))].slice(0, 8);
       try {
         setPageSnapshots(await renderCitedPages(citedPages));
       } catch {
         setPageSnapshots([]);
       }
-      const termCount = result.sections.reduce((total, section) => total + section.keyTerms.length, 0);
-      setQuizAnswers(new Array(termCount).fill(-1));
-      setQuizSubmitted(false);
       setWorkState("ready");
     } catch (caughtError) {
       setError(
@@ -257,8 +245,6 @@ export default function Home() {
     setPageSnapshots([]);
     pdfBytes.current = null;
     clearStudySession();
-    setQuizAnswers([]);
-    setQuizSubmitted(false);
     setError("");
     setWorkState("empty");
     if (fileInput.current) fileInput.current.value = "";
@@ -277,25 +263,6 @@ export default function Home() {
   }
 
   const pageCountLabel = `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
-  const practiceTerms = lesson
-    ? lesson.sections.flatMap((section) => section.keyTerms.map((keyTerm) => ({ ...keyTerm, sourcePages: section.sourcePages })))
-    : [];
-  const practiceQuestions = practiceTerms.map((term, index) => {
-    const otherTerms = practiceTerms.filter((item, itemIndex) => itemIndex !== index);
-    const choices = [term.term, ...otherTerms.slice(0, 3).map((item) => item.term)];
-    const rotation = index % choices.length;
-    const orderedChoices = [...choices.slice(rotation), ...choices.slice(0, rotation)];
-    return { ...term, choices: orderedChoices, correctIndex: (choices.length - rotation) % choices.length };
-  });
-  const currentQuizAnswers = practiceQuestions.map((_, index) => quizAnswers[index] ?? -1);
-  const currentQuestion = practiceQuestions[quizIndex];
-  const selectedQuizAnswer = currentQuizAnswers[quizIndex] ?? -1;
-  const selectedQuizTerm = practiceTerms.find((term) => term.term === currentQuestion?.choices[selectedQuizAnswer]);
-  const selectedAnswerIsCorrect = currentQuestion !== undefined && selectedQuizAnswer === currentQuestion.correctIndex;
-  const quizScore = practiceQuestions.reduce(
-    (score, question, index) => score + (currentQuizAnswers[index] === question.correctIndex ? 1 : 0),
-    0,
-  );
 
   return (
     <main className="app-shell">
@@ -414,7 +381,7 @@ export default function Home() {
                     <BookOpenCheck size={18} />
                     <p>The lesson stays within your source. Add a packet with more detail to build out the teaching sections.</p>
                   </div>
-                ) : studyMode === "lesson" ? (
+                ) : (
                   <>
                     <div className="teaching-sections">
                       {lesson.sections.map((section, index) => (
@@ -486,68 +453,18 @@ export default function Home() {
                           <RotateCcw size={18} /> Practice Flashcards
                         </button>
                       )}
-                      <button id="quick-test" className="button button-test" type="button" onClick={() => { setStudySessionMode("test"); setQuizIndex(0); setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizSubmitted(false); }} disabled={practiceQuestions.length < 2}>
-                        <Check size={18} /> Take Quick Test
-                      </button>
+                      {lesson.quickTestQuestions.length === 5 ? (
+                        <Link id="quick-test" className="button button-test" href="/test">
+                          <Check size={18} /> Take Quick Test
+                        </Link>
+                      ) : (
+                        <button id="quick-test" className="button button-test" type="button" disabled title="This packet does not support five distinct cited questions.">
+                          <Check size={18} /> Take Quick Test
+                        </button>
+                      )}
                     </div>
                   </>
-                ) : studyMode === "test" && practiceQuestions.length >= 2 ? (
-                  <div className="practice-panel">
-                    <button className="back-to-lesson" type="button" onClick={() => setStudySessionMode("lesson")}><ArrowLeft size={15} /> Back to lesson</button>
-                    {quizSubmitted ? (
-                      <div className="test-result">
-                        <div className="test-result-icon"><Check size={22} /></div>
-                        <div className="practice-count">QUICK TEST COMPLETE</div>
-                        <h4>{quizScore} / {practiceQuestions.length} correct</h4>
-                        <p>Review the lesson sections and key terms, then try again.</p>
-                        <button className="button button-outline" type="button" onClick={() => { setQuizAnswers(new Array(practiceQuestions.length).fill(-1)); setQuizIndex(0); setQuizSubmitted(false); }}><RotateCcw size={15} /> Try again</button>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="practice-count">QUESTION {quizIndex + 1} <span>OF {practiceQuestions.length}</span></div>
-                        <h4 className="test-prompt">Which scientific term matches this description?</h4>
-                        <p className="test-definition">{practiceTerms[quizIndex].definition}</p>
-                        <div className="test-choices">
-                          {practiceQuestions[quizIndex].choices.map((choice, choiceIndex) => (
-                            <button
-                              className={`test-choice ${selectedQuizAnswer === choiceIndex ? selectedAnswerIsCorrect ? "test-choice-correct" : "test-choice-incorrect" : ""}`}
-                              type="button"
-                              key={`${quizIndex}-${choice}`}
-                              onClick={() => setQuizAnswers(currentQuizAnswers.map((answer, answerIndex) => answerIndex === quizIndex ? choiceIndex : answer))}
-                            >
-                              <span>{String.fromCharCode(65 + choiceIndex)}</span>{choice}
-                            </button>
-                          ))}
-                        </div>
-                        {selectedQuizAnswer !== -1 && currentQuestion && (
-                          <div className={`test-feedback ${selectedAnswerIsCorrect ? "test-feedback-correct" : "test-feedback-incorrect"}`} role={selectedAnswerIsCorrect ? "status" : "alert"}>
-                            <span className="test-feedback-mark">{selectedAnswerIsCorrect ? <Check size={17} /> : <X size={17} />}</span>
-                            <div>
-                              <strong>{selectedAnswerIsCorrect ? "Correct!" : "Not quite."}</strong>
-                              <p>
-                                {selectedAnswerIsCorrect
-                                  ? `${currentQuestion.term}: ${currentQuestion.definition}`
-                                  : `The correct answer is ${currentQuestion.term}: ${currentQuestion.definition} Your choice, ${selectedQuizTerm?.term ?? currentQuestion.choices[selectedQuizAnswer]}, refers to ${selectedQuizTerm?.definition ?? "a different term"}, which does not match this description.`}
-                              </p>
-                              {!selectedAnswerIsCorrect && selectedQuizTerm && (
-                                <PageCitations pages={[...new Set([...currentQuestion.sourcePages, ...selectedQuizTerm.sourcePages])]} />
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        <PageCitations pages={practiceQuestions[quizIndex].sourcePages} />
-                        <div className="practice-controls">
-                          <button className="button button-outline" type="button" disabled={quizIndex === 0} onClick={() => setQuizIndex((current) => Math.max(0, current - 1))}><ArrowLeft size={15} /> Previous</button>
-                          {quizIndex < practiceQuestions.length - 1 ? (
-                            <button className="button button-test" type="button" disabled={currentQuizAnswers[quizIndex] === -1} onClick={() => setQuizIndex((current) => Math.min(practiceQuestions.length - 1, current + 1))}>Next <ArrowRight size={15} /></button>
-                          ) : (
-                            <button className="button button-test" type="button" disabled={currentQuizAnswers.some((answer) => answer === -1)} onClick={() => setQuizSubmitted(true)}>Check answers <Check size={15} /></button>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ) : null}
+                )}
               </div>
             ) : (
               <div className="lesson-empty">
