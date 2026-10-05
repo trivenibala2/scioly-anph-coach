@@ -84,6 +84,11 @@ export type StudyProgress = {
   completedAt: string | null;
 };
 
+export type SourcePageText = {
+  pageNumber: number;
+  text: string;
+};
+
 export type StudyPackage = {
   id: string;
   weekNumber: number;
@@ -92,6 +97,7 @@ export type StudyPackage = {
   status: string;
   pdfUrl: string | null;
   lesson: LessonResult;
+  pages: SourcePageText[];
   progress: StudyProgress | null;
 };
 

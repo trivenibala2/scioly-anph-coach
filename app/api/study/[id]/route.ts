@@ -21,7 +21,7 @@ export async function GET(request: Request, { params }: Context) {
     if (!week) return Response.json({ error: "Study not found." }, { status: 404 });
 
     const [material, lesson, deck, test, progress] = await Promise.all([
-      supabase.from("study_materials").select("file_name, file_path, status").eq("study_week_id", id).maybeSingle(),
+      supabase.from("study_materials").select("file_name, file_path, status, extracted_text").eq("study_week_id", id).maybeSingle(),
       supabase.from("lessons").select("content").eq("study_week_id", id).maybeSingle(),
       supabase.from("flashcard_decks").select("content").eq("study_week_id", id).maybeSingle(),
       supabase.from("tests").select("content").eq("study_week_id", id).maybeSingle(),
@@ -51,6 +51,26 @@ export async function GET(request: Request, { params }: Context) {
       pdfUrl = signed?.signedUrl ?? null;
     }
 
+    // The extracted per-page text lets the lesson show the complete source text for each module,
+    // so students can study everything without opening the PDF.
+    let pages: Array<{ pageNumber: number; text: string }> = [];
+    if (typeof material.data?.extracted_text === "string") {
+      try {
+        const parsed: unknown = JSON.parse(material.data.extracted_text);
+        if (Array.isArray(parsed)) {
+          pages = parsed.flatMap((page) => (
+            typeof page === "object" && page !== null &&
+            typeof (page as { pageNumber?: unknown }).pageNumber === "number" &&
+            typeof (page as { text?: unknown }).text === "string"
+              ? [{ pageNumber: (page as { pageNumber: number }).pageNumber, text: (page as { text: string }).text }]
+              : []
+          ));
+        }
+      } catch {
+        /* The source-text panel is a bonus; the lesson still works without it. */
+      }
+    }
+
     return Response.json({
       study: {
         id: week.id,
@@ -60,6 +80,7 @@ export async function GET(request: Request, { params }: Context) {
         status: week.status,
         pdfUrl,
         lesson: lessonResult,
+        pages,
         progress: toProgress(progress.data as ProgressRow | null),
       },
     });

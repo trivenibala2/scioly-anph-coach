@@ -16,7 +16,7 @@ import {
   ZoomIn,
   X,
 } from "lucide-react";
-import type { LessonResult, StudyFlashcard, QuickTestQuestion } from "../study-session";
+import type { LessonResult, StudyFlashcard, QuickTestQuestion, SourcePageText } from "../study-session";
 import type { PageSnapshot } from "../pdf-snapshots";
 
 type PaginatedLessonProps = {
@@ -25,6 +25,7 @@ type PaginatedLessonProps = {
   fileName: string;
   pdfUrl: string | null;
   pageSnapshots: PageSnapshot[];
+  pages: SourcePageText[];
   onComplete: () => void;
   onNavigateToFlashcards: () => void;
   onNavigateToTest: () => void;
@@ -286,6 +287,7 @@ export function PaginatedLesson({
   fileName,
   pdfUrl,
   pageSnapshots,
+  pages,
   onComplete,
   onNavigateToFlashcards,
   onNavigateToTest,
@@ -307,6 +309,13 @@ export function PaginatedLesson({
     const fromVisuals = (section.visuals ?? []).flatMap((visual) => visual.sourcePages);
     return [...new Set([...fromVisuals, ...section.sourcePages])];
   };
+
+  // The exact extracted text of a module's pages, so students can read the full source
+  // for that module without opening the PDF.
+  const sourceTextFor = (section: LessonResult["sections"][number]) =>
+    section.sourcePages
+      .map((pageNumber) => pages.find((page) => page.pageNumber === pageNumber))
+      .filter((page): page is SourcePageText => Boolean(page?.text));
 
   const handleNext = () => {
     if (sectionView !== "content") {
@@ -450,6 +459,20 @@ export function PaginatedLesson({
               <span className="source-label">IN YOUR PDF</span>
               <PageCitations pages={currentSection.sourcePages} />
             </div>
+
+            {sourceTextFor(currentSection).length > 0 && (
+              <details className="source-text-panel">
+                <summary>Show the full packet text for these pages</summary>
+                <div className="source-text-body">
+                  {sourceTextFor(currentSection).map((page) => (
+                    <div className="source-text-page" key={page.pageNumber}>
+                      <div className="source-text-page-label">PDF page {page.pageNumber}</div>
+                      <p>{page.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
 
             <div className="section-practice-actions">
               {currentSection.flashcards.length > 0 && (

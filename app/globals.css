@@ -2750,3 +2750,63 @@ h1 {
 .diagram-lightbox-close:hover {
   background: #fff;
 }
+
+/* Full packet source text, per module */
+.source-text-panel {
+  margin-top: 16px;
+  border: 1px solid #e2ebe5;
+  border-radius: 8px;
+  background: #f8fbf8;
+}
+
+.source-text-panel > summary {
+  padding: 12px 14px;
+  color: #245b43;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.source-text-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-text-panel > summary::before {
+  content: "+ ";
+  color: #4d7663;
+  font-weight: 700;
+}
+
+.source-text-panel[open] > summary::before {
+  content: "– ";
+}
+
+.source-text-panel[open] > summary {
+  border-bottom: 1px solid #e2ebe5;
+}
+
+.source-text-body {
+  padding: 6px 14px 14px;
+}
+
+.source-text-page {
+  margin-top: 12px;
+}
+
+.source-text-page-label {
+  color: #87968f;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.source-text-page p {
+  margin: 0;
+  color: #3a4a43;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}

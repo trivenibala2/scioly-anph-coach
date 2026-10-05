@@ -59,6 +59,7 @@ export default function LessonPage() {
               fileName={study.fileName}
               pdfUrl={pdfUrl}
               pageSnapshots={pageSnapshots}
+              pages={study.pages ?? []}
               isCompleted={Boolean(study.progress?.lessonCompletedAt)}
               onComplete={() => void recordProgress({ event: "lesson" })}
               onNavigateToFlashcards={() => {
