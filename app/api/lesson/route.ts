@@ -60,8 +60,35 @@ function normalizeEvidenceText(text: string) {
   return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+// A quote counts as verified when the page text contains it exactly, OR contains any run of five
+// consecutive words from it. The tolerant run handles the small differences between the model's
+// transcription (it also reads the PDF image) and the pdfjs-extracted text — differing spacing,
+// subscripts (O₂), units (µm), or an added/dropped word at the edges — while still requiring a
+// real verbatim span from the page, which is hard to fabricate.
+function quoteMatchesPage(quoteNorm: string, pageNorm: string) {
+  if (!quoteNorm) return false;
+  if (pageNorm.includes(quoteNorm)) return true;
+  const words = quoteNorm.split(" ").filter(Boolean);
+  if (words.length < 5) return false;
+  for (let index = 0; index + 5 <= words.length; index += 1) {
+    if (pageNorm.includes(words.slice(index, index + 5).join(" "))) return true;
+  }
+  return false;
+}
+
 function verifiedEvidencePages(value: unknown, sourceByPage: Map<number, string>) {
   if (!Array.isArray(value)) return [];
+
+  const normalizedPageCache = new Map<number, string>();
+  const normalizedPage = (pageNumber: number) => {
+    let pageNorm = normalizedPageCache.get(pageNumber);
+    if (pageNorm === undefined) {
+      const pageText = sourceByPage.get(pageNumber);
+      pageNorm = pageText ? normalizeEvidenceText(pageText) : "";
+      normalizedPageCache.set(pageNumber, pageNorm);
+    }
+    return pageNorm;
+  };
 
   const verifiedPages = new Set<number>();
   for (const item of value) {
@@ -74,8 +101,20 @@ function verifiedEvidencePages(value: unknown, sourceByPage: Map<number, string>
 
     const quote = normalizeEvidenceText(evidence.quote);
     if (quote.split(" ").length < 4) continue;
-    const pageText = sourceByPage.get(evidence.pageNumber);
-    if (pageText && normalizeEvidenceText(pageText).includes(quote)) verifiedPages.add(evidence.pageNumber);
+
+    // Prefer the cited page, but if the quote is not there, find the page that actually contains
+    // it. This self-corrects small page-number mistakes instead of dropping a real quote.
+    if (sourceByPage.has(evidence.pageNumber) && quoteMatchesPage(quote, normalizedPage(evidence.pageNumber))) {
+      verifiedPages.add(evidence.pageNumber);
+      continue;
+    }
+    for (const pageNumber of sourceByPage.keys()) {
+      if (pageNumber === evidence.pageNumber) continue;
+      if (quoteMatchesPage(quote, normalizedPage(pageNumber))) {
+        verifiedPages.add(pageNumber);
+        break;
+      }
+    }
   }
 
   return [...verifiedPages].sort((first, second) => first - second);
@@ -221,7 +260,7 @@ SOURCE AUTHORITY: The supplied PDF is the only source. Use only facts explicitly
 
 READING LEVEL (most important style rule): Write for an average 13-year-old (grade 7 to 8). Use short, plain sentences of about 12 to 18 words. Prefer everyday words over textbook words when the meaning is the same (for example "makes" over "produces", "job" over "function", "tiny" over "microscopic"). When a scientific term is needed because the PDF teaches it, say its plain meaning first, then the term (for example "the main breathing muscle under your lungs, called the diaphragm"). Use a warm second-person voice ("your lungs", "you breathe in"). Keep paragraphs short (2 to 4 sentences). Simplifying must NEVER add or change a fact; it only rewords the same supported fact, and the evidence quote must still support the simpler sentence.
 
-EVIDENCE: Every claim you present must be backed by an evidence quote copied EXACTLY from that page's selectable text, with the correct page number. The application verifies each quote against the extracted page text, so a quote found only inside a diagram image will be rejected and its item dropped. You may read diagrams to understand the material, but cite the page text. Do not paraphrase or invent quotes, and do not use a quote that only partially supports its item.
+EVIDENCE: Every claim you present must be backed by an evidence quote. Copy each quote VERBATIM — character for character — from the "Packet page-numbered text" block provided in this request, and use that block's matching [Page N] number. Do NOT retype the quote from the PDF image; the application verifies quotes against that text block, so a quote typed from the picture (with different spacing or symbols) will be rejected and its item dropped. You may look at the diagrams to understand the material, but always take the actual quote from the text block. Pick a quote of at least 6 words that appears exactly in the text. Do not paraphrase, fix, shorten, or invent quotes, and do not use a quote that only partially supports its item.
 
 DIAGRAMS: The application shows students the packet's own diagrams by rendering the real PDF pages; it does not generate new images. Blank practice or "label-it" worksheets (empty numbered boxes, no answers) contain NO facts — never treat their blanks as real structures or invent their labels.
 
@@ -628,7 +667,7 @@ export async function POST(request: Request) {
     const intro = outline.intro.trim();
     if (!title || !intro) throw new Error("Gemini returned an incomplete outline.");
 
-    const moduleStubs = outline.insufficientInformation ? [] : outline.modules.flatMap((item) => {
+    const moduleStubs = outline.modules.flatMap((item) => {
       if (typeof item !== "object" || item === null) return [];
       const stub = item as { heading?: unknown; focus?: unknown; sourcePages?: unknown };
       if (typeof stub.heading !== "string" || !stub.heading.trim()) return [];
@@ -638,7 +677,10 @@ export async function POST(request: Request) {
       return [{ heading: stub.heading.trim(), focus: typeof stub.focus === "string" ? stub.focus.trim() : "", sourcePages: stubPages }];
     }).slice(0, MAX_MODULES);
 
-    if (outline.insufficientInformation || !introSourcePages.length || !moduleStubs.length) {
+    // Only give up before generating when the model named no modules at all. We do NOT gate on the
+    // intro's quotes verifying (intros are paraphrased overviews) or on the model's own
+    // insufficientInformation flag — the real test is whether the modules produce verifiable content.
+    if (!moduleStubs.length) {
       return Response.json(INSUFFICIENT_RESPONSE);
     }
 
