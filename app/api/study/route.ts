@@ -45,15 +45,18 @@ export async function POST(request: Request) {
       return Response.json({ error: "Choose a week number from 0 to 99." }, { status: 400 });
     }
 
+    // The lesson is optional. When omitted, we persist the PDF and extracted text now and
+    // leave the week in "processing" so a slow or failed generation never loses the upload.
+    // The admin then attaches the generated lesson via /api/study/{id}/finalize.
     let pages: unknown;
-    let lesson: unknown;
+    let lesson: unknown = null;
     try {
       pages = JSON.parse(String(pagesValue ?? ""));
-      lesson = JSON.parse(String(lessonValue ?? ""));
+      if (lessonValue != null && String(lessonValue) !== "") lesson = JSON.parse(String(lessonValue));
     } catch {
       return Response.json({ error: "The study data was not valid." }, { status: 400 });
     }
-    if (!isPages(pages) || !isLessonResult(lesson)) {
+    if (!isPages(pages) || (lesson !== null && !isLessonResult(lesson))) {
       return Response.json({ error: "The study data was not valid." }, { status: 400 });
     }
 
@@ -73,11 +76,12 @@ export async function POST(request: Request) {
       .upload(storagePath, file, { contentType: "application/pdf", upsert: false });
     if (uploadError) throw uploadError;
 
+    const weekTitle = lesson ? lesson.title : `Week ${weekValue} — generating…`;
     const { error: weekError } = await supabase.from("study_weeks").insert({
       id: studyId,
       week_number: weekValue,
-      title: lesson.title,
-      status: "ready",
+      title: weekTitle,
+      status: lesson ? "ready" : "processing",
       generated_content: lesson,
     });
     if (weekError) {
@@ -90,7 +94,7 @@ export async function POST(request: Request) {
 
     const { error: materialError } = await supabase.from("study_materials").insert({
       study_week_id: studyId,
-      title: lesson.title,
+      title: weekTitle,
       file_name: file.name,
       file_path: storagePath,
       extracted_text: JSON.stringify(pages),
@@ -98,19 +102,21 @@ export async function POST(request: Request) {
     });
     if (materialError) throw materialError;
 
-    const inserts = await Promise.all([
-      supabase.from("lessons").insert({ study_week_id: studyId, content: lesson }),
-      supabase.from("flashcard_decks").insert({ study_week_id: studyId, content: { title: lesson.title, cards: lesson.flashcards } }),
-      supabase.from("tests").insert({ study_week_id: studyId, content: { title: lesson.title, questions: lesson.quickTestQuestions } }),
-    ]);
-    const failedInsert = inserts.find((result) => result.error);
-    if (failedInsert?.error) {
-      await supabase.from("study_weeks").delete().eq("id", studyId);
-      await supabase.storage.from("study-materials").remove([storagePath]);
-      throw failedInsert.error;
+    if (lesson) {
+      const inserts = await Promise.all([
+        supabase.from("lessons").insert({ study_week_id: studyId, content: lesson }),
+        supabase.from("flashcard_decks").insert({ study_week_id: studyId, content: { title: lesson.title, cards: lesson.flashcards } }),
+        supabase.from("tests").insert({ study_week_id: studyId, content: { title: lesson.title, questions: lesson.quickTestQuestions } }),
+      ]);
+      const failedInsert = inserts.find((result) => result.error);
+      if (failedInsert?.error) {
+        await supabase.from("study_weeks").delete().eq("id", studyId);
+        await supabase.storage.from("study-materials").remove([storagePath]);
+        throw failedInsert.error;
+      }
     }
 
-    return Response.json({ studyId, weekNumber: weekValue, lesson });
+    return Response.json({ studyId, weekNumber: weekValue, status: lesson ? "ready" : "processing", lesson: lesson ?? null });
   } catch (error) {
     console.error("Failed to persist study:", error);
     if (storagePath) await supabase.storage.from("study-materials").remove([storagePath]).catch(() => {});

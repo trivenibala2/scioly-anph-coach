@@ -7,6 +7,18 @@ export type PageSnapshot = {
 
 export type ExtractedPage = { pageNumber: number; text: string };
 
+// Reads the raw PDF as base64 so it can be sent to Gemini as a document part. Gemini reads
+// the PDF natively, including diagrams and labeled figures that are not in the selectable text.
+export async function readPdfAsBase64(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the PDF file."));
+    reader.readAsDataURL(file);
+  });
+  return dataUrl.split(",")[1] ?? "";
+}
+
 async function loadPdfjs() {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();

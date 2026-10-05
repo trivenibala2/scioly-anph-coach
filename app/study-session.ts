@@ -3,11 +3,24 @@ export type KeyTerm = {
   definition: string;
 };
 
+export type LessonVisual = {
+  title: string;
+  purpose: string;
+  visualPrompt: string;
+  sourcePages: number[];
+  sourceQuotes: string[];
+  type: "anatomy_diagram" | "concept_diagram" | "process_diagram";
+  imageUrl?: string;
+};
+
 export type LessonSection = {
   heading: string;
   paragraphs: string[];
   keyTerms: KeyTerm[];
   sourcePages: number[];
+  visuals?: LessonVisual[];
+  flashcards: StudyFlashcard[];
+  testQuestions: QuickTestQuestion[];
 };
 
 export type StudyFlashcard = {
@@ -54,6 +67,7 @@ export type LessonResult = {
   rememberThis: string[];
   flashcards: StudyFlashcard[];
   quickTestQuestions: QuickTestQuestion[];
+  visuals?: LessonVisual[];
   insufficientInformation: boolean;
 };
 
@@ -125,12 +139,29 @@ export function isLessonResult(value: unknown): value is LessonResult {
     if (
       !isRecord(section) || typeof section.heading !== "string" ||
       !Array.isArray(section.paragraphs) || !section.paragraphs.every((paragraph) => typeof paragraph === "string") ||
-      !Array.isArray(section.keyTerms) || !arePageNumbers(section.sourcePages)
+      !Array.isArray(section.keyTerms) || !arePageNumbers(section.sourcePages) ||
+      !Array.isArray(section.flashcards) || !Array.isArray(section.testQuestions)
     ) return false;
 
-    return section.keyTerms.every((keyTerm) =>
-      isRecord(keyTerm) && typeof keyTerm.term === "string" && typeof keyTerm.definition === "string",
+    const validKeyTerms = section.keyTerms.every((keyTerm) =>
+      isRecord(keyTerm) && typeof keyTerm.term === "string" && typeof keyTerm.definition === "string"
     );
+
+    const validSectionFlashcards = section.flashcards.every((flashcard: unknown) =>
+      isRecord(flashcard) && typeof flashcard.question === "string" && typeof flashcard.answer === "string" &&
+      arePageNumbers(flashcard.sourcePages)
+    );
+
+    const validSectionTests = section.testQuestions.every((item: unknown) =>
+      isRecord(item) && typeof item.topic === "string" && typeof item.concept === "string" &&
+      (item.difficulty === "easy" || item.difficulty === "medium" || item.difficulty === "challenging") &&
+      typeof item.question === "string" && Array.isArray(item.options) && item.options.length === 4 &&
+      (item.options as unknown[]).every((option) => typeof option === "string") && typeof item.correctAnswer === "number" &&
+      Number.isInteger(item.correctAnswer) && item.correctAnswer >= 0 && (item.correctAnswer as number) < 4 &&
+      typeof item.explanation === "string" && arePageNumbers(item.sourcePages)
+    );
+
+    return validKeyTerms && validSectionFlashcards && validSectionTests;
   });
   const validFlashcards = value.flashcards.length <= 10 && value.flashcards.every((flashcard) =>
     isRecord(flashcard) && typeof flashcard.question === "string" && typeof flashcard.answer === "string" &&

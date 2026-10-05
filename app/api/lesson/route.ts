@@ -10,6 +10,8 @@ type LessonSection = {
   paragraphs: string[];
   keyTerms: Array<{ term: string; definition: string }>;
   sourcePages: number[];
+  flashcards: StudyFlashcard[];
+  testQuestions: QuickTestQuestion[];
 };
 
 type StudyFlashcard = {
@@ -39,6 +41,34 @@ type GeneratedSection = {
   paragraphs: Array<{ text: string; evidence: EvidenceQuote[] }>;
   keyTerms: Array<{ term: string; definition: string; evidence: EvidenceQuote[] }>;
   sourcePages: number[];
+  flashcards: Array<{
+    question: string;
+    answer: string;
+    sourcePages: number[];
+    evidence: EvidenceQuote[];
+  }>;
+  testQuestions: Array<{
+    topic: string;
+    concept: string;
+    difficulty: string;
+    question: string;
+    options: string[];
+    correctAnswer: number;
+    explanation: string;
+    sourcePages: number[];
+    questionEvidence: EvidenceQuote[];
+    explanationEvidence: EvidenceQuote[];
+  }>;
+};
+
+type LessonVisual = {
+  title: string;
+  purpose: string;
+  visualPrompt: string;
+  sourcePages: number[];
+  sourceQuotes: string[];
+  type: "anatomy_diagram" | "concept_diagram" | "process_diagram";
+  imageUrl?: string;
 };
 
 type StructuredLesson = {
@@ -49,7 +79,17 @@ type StructuredLesson = {
   rememberThis: string[];
   flashcards: StudyFlashcard[];
   quickTestQuestions: QuickTestQuestion[];
+  visuals: LessonVisual[];
   insufficientInformation: boolean;
+};
+
+type GeneratedVisual = {
+  title: string;
+  purpose: string;
+  visualPrompt: string;
+  sourcePages: number[];
+  sourceQuotes: string[];
+  type: "anatomy_diagram" | "concept_diagram" | "process_diagram";
 };
 
 type GeneratedLesson = {
@@ -76,6 +116,7 @@ type GeneratedLesson = {
     questionEvidence: EvidenceQuote[];
     explanationEvidence: EvidenceQuote[];
   }>;
+  visuals: GeneratedVisual[];
   insufficientInformation: boolean;
 };
 
@@ -128,7 +169,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { pages?: unknown };
+  let body: { pages?: unknown; pdf?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -137,6 +178,20 @@ export async function POST(request: Request) {
 
   if (!Array.isArray(body.pages) || body.pages.length === 0 || body.pages.length > MAX_PAGES) {
     return Response.json({ error: "Upload a PDF with 1 to 200 pages of selectable text." }, { status: 400 });
+  }
+
+  // The PDF itself (base64) is optional. When present, it is sent to Gemini as a document part
+  // so the model can read diagrams and labeled figures, not just the extracted text.
+  let pdfPart: { inlineData: { mimeType: string; data: string } } | null = null;
+  if (body.pdf !== undefined && body.pdf !== null) {
+    const pdf = body.pdf as { data?: unknown; mimeType?: unknown };
+    if (
+      typeof pdf.data !== "string" || pdf.data.length === 0 || pdf.data.length > 30_000_000 ||
+      pdf.mimeType !== "application/pdf"
+    ) {
+      return Response.json({ error: "The uploaded PDF data was not valid." }, { status: 400 });
+    }
+    pdfPart = { inlineData: { mimeType: "application/pdf", data: pdf.data } };
   }
 
   const pages: SourcePage[] = [];
@@ -208,36 +263,48 @@ Preserve the scientific terminology and meaning used in the PDF. Explain support
 Do not add importance claims, adjectives such as "vital" or "crucial", or descriptions that are not supported by the PDF.
 
 FULL-PACKET COVERAGE:
-Represent the supplied material faithfully.
+Represent the ENTIRE supplied packet faithfully. Your goal is to teach every concept the packet teaches, so a student who reads your lesson has seen all the material in the packet.
 
-Do NOT focus on only one small portion of the PDF.
+Do NOT focus on only one small portion of the PDF. Do NOT drop a module, a numbered subsection, a table, or a labeled diagram just to be brief.
 
-If the supplied PDF contains multiple modules, sections, tables, diagrams, illustrations, practice activities, flashcards, quizzes, or other instructional material, use the relevant supported information from across the entire supplied material.
+The packet is usually organized into numbered Modules (for example "Module 1", "Module 2", "Module 3") with numbered subsections (for example 1.1, 1.2, 1.3). Follow that structure. Turn each numbered subsection (or a small group of closely related subsections) into its own teaching section, and keep the packet's teaching order.
 
-Make sure the learning content covers ALL supplied modules and the major concepts contained in them.
+If the packet contains tables (for example a table of jobs, parts, cartilages, or muscles), convert every row into clear explanatory sentences or key terms so no row is lost. Tables carry heavily tested facts; never skip them.
 
-Do not omit an entire module or major topic simply because the lesson is designed to be concise.
+The packet includes helpful study callouts such as "Remember it" (a mnemonic), "Test tip" (what tests like to ask), and "Stop and check" (a self-quiz). When a mnemonic or test tip is given, include it in the relevant section exactly as support allows, because students rely on these. Do not invent new mnemonics.
 
-Do not copy the packet page-by-page. Instead, organize the major supported concepts into a coherent student-friendly lesson.
+A packet often ends with its own flashcards, a quiz, and an answer key. Treat these as authoritative source material you SHOULD mine when building each section's flashcards and test questions — but map every mined card or question to the specific module/section whose content it tests. Do not treat a repeated answer key or a repeated flashcard as a brand-new concept.
 
-Prioritize the instructional content and major concepts. Do not treat repeated answer keys, repeated flashcards, or repeated quiz questions as new concepts unless they contain information that is not supported elsewhere.
+Do not copy the packet word-for-word. Rephrase into a coherent, student-friendly lesson while keeping every scientific fact and term the packet supports.
 
 LESSON:
-Create a concise lesson designed for approximately five minutes of reading.
+Create a comprehensive lesson that covers ALL content from the supplied PDF material in a student-friendly, easy-to-understand format suitable for middle and high school students (Science Olympiad Division B/C).
 
-Start with a short introduction.
+Break the content into clear, digestible reading sections that mirror the packet's own modules and numbered subsections. Each section should be one focused topic that a student can read and understand in a single short study session (about 5 to 8 minutes).
 
-Then create enough teaching sections to cover the major supported concepts from ALL supplied modules.
+Start with a short introduction that previews every module the student will work through, in order.
 
-Prefer 3 to 7 sections when practical, but DO NOT omit important material just to meet a section-count target.
+Then create one teaching section per numbered subsection of the packet (or per small group of tightly related subsections). Do not limit the number of sections — if the packet has 15 subsections of real teaching content, create about that many sections. It is far better to have many short, focused sections than a few long ones. Cover every module and every subsection.
 
-Each section should contain natural explanatory paragraphs.
+Name each section clearly, ideally echoing the packet's own module/subsection title (for example "Module 1 · Why We Breathe", "The Nose and Nasal Cavity", "The Larynx — Voice Box") so students can match it to the packet.
 
-Do not write the lesson as a list of bullets.
+Each section will be displayed on its own page with "Next" navigation, so students progress through the material one module at a time at their own pace.
 
-Do not create one giant wall of text.
+READING LEVEL — WRITE FOR A 13-YEAR-OLD:
+Write every section so an average 13-year-old (about 7th to 8th grade reading level) can read it easily and enjoy it. This is the most important style rule.
 
-Use key terms only when the supplied PDF supports their meaning or definition.
+- Use short, plain sentences. Aim for about 12 to 18 words per sentence. Break long sentences into two.
+- Use everyday words instead of textbook words whenever the meaning is the same. For example, prefer "makes" over "produces", "lets" over "facilitates", "job" over "function", "tiny" over "microscopic", "move air in and out" over "pulmonary ventilation" (then name the scientific term once).
+- When you must use a scientific term (because the PDF teaches it and the student needs it), introduce it in a friendly way: say what it means in plain words first, then give the term. Example: "the main breathing muscle under your lungs, called the diaphragm".
+- Explain hard ideas with simple, concrete comparisons to things a kid already knows, but ONLY when the comparison does not add any new fact beyond what the PDF supports. If you cannot make a safe comparison, just explain it plainly.
+- Use a warm, encouraging second-person voice ("you breathe in", "your lungs"). It is fine to speak directly to the student.
+- Keep paragraphs short: 2 to 4 sentences each. Do not write one giant wall of text, and do not write the lesson as a list of bullets.
+- Keep each section focused and manageable - a student should be able to read and understand one section in about 5 to 8 minutes.
+
+SIMPLIFY WITHOUT CHANGING THE FACTS:
+Rephrasing for simplicity must never add, exaggerate, or change meaning. Do not add importance words such as "vital", "crucial", or "amazing" unless the PDF uses them. Do not add any fact, number, cause, or relationship that the PDF does not state. Simpler wording of the SAME supported fact is the goal; a simpler-sounding but unsupported claim is not allowed. Your evidence quote must still support the simplified sentence.
+
+Use key terms only when the supplied PDF supports their meaning or definition. Write each key-term definition in one short, plain sentence a 13-year-old would understand, while keeping it accurate to the PDF.
 
 For the intro, every paragraph, every key-term definition, and every Remember This point must have exact evidence copied from the supplied PDF and the page number supporting it.
 
@@ -252,39 +319,42 @@ End with 2 to 4 short Remember This points.
 Every Remember This point must have supporting evidence.
 
 SOURCE EVIDENCE:
-Evidence quotes must be copied exactly from the supplied PDF text or from clearly readable supplied PDF visual content.
+Every evidence quote MUST be copied exactly from the page's selectable TEXT, with its correct page number. The application verifies each quote against the extracted page text, so a quote that appears only inside a diagram image (not in the page text) will be rejected and its item dropped.
 
-Do not paraphrase an evidence quote.
+You may use diagrams and labeled figures to understand and explain the material, but when you state a fact, support it with a quote from the page text. If a fact is shown only in a figure and is not written anywhere in the text, do not present it as a cited claim.
 
-Do not create evidence quotes.
+Do not paraphrase an evidence quote. Do not invent an evidence quote. Do not use a quote that only partially supports the factual claim.
 
-Do not use a quote that only partially supports the factual claim.
+FLASHCARDS PER SECTION:
+For each teaching section (module), create 3 to 6 high-value flashcards that test the key concepts covered in THAT SPECIFIC SECTION ONLY. This mirrors how the packet groups its own flashcards by module.
 
-The application verifies evidence quotes against the supplied source.
+Build these flashcards from the section content, the supplied PDF pages referenced in that section, and — when the packet includes its own flashcards or quiz questions on that topic — from those as well. Prefer mining the packet's own flashcards and quiz items for the matching module over inventing new ones.
 
-FLASHCARDS:
-Create 8 to 10 high-value flashcards when the supplied material supports that many distinct concepts.
-
-Build flashcards from the lesson and the supplied PDF together.
-
-Each card should test one important concept, have a short scientifically accurate answer, avoid repeating another card, and avoid trivial facts.
+Each card should test one important concept from that section, have a short scientifically accurate answer, avoid repeating another card, and avoid trivial facts.
 
 Every flashcard must include source page numbers and exact evidence supporting the information on the card.
 
-Do not pad the flashcard set.
+The flashcards must be returned inside their section's data, not only as a separate global array.
 
-If the supplied material does not support 8 to 10 distinct high-value concepts, return only the number that is genuinely supported.
+SECTION TEST QUESTIONS:
+For each teaching section (module), create 2 to 3 multiple-choice test questions that assess understanding of THAT SPECIFIC SECTION ONLY. This is the "module test" a student takes right after reading that module.
 
-QUICK TEST:
-Create exactly five multiple-choice questions when five distinct questions can be supported.
+When the packet contains its own quiz questions (and an answer key) covering that module, adapt those questions and use the answer key's correct answer and its "why" as your explanation. Only invent a question when the packet does not already supply enough for that module.
 
-Use only facts explicitly supported by the supplied PDF and lesson.
+Use only facts explicitly supported by the supplied PDF pages and section content.
 
-The five questions should represent different concepts from the supplied material when possible.
+Mix easy and medium difficulty questions for each section.
 
-Mix easy, medium, and challenging questions.
+These per-section test questions are in addition to the global quick test questions.
 
-Each question must have:
+GLOBAL QUICK TEST:
+Also create exactly five multiple-choice questions for a separate end-of-week Quick Test that spans the whole packet.
+
+Draw these FIRST from the packet's own quiz and answer key. If the packet includes a quiz, select five of its multiple-choice questions that span different modules, and use the matching answer-key entry to set the correct option and to write the explanation (the answer key's "why"). Only write an original question when the packet's quiz does not supply enough usable multiple-choice items.
+
+The five questions should represent different concepts from across the packet. Mix easy, medium, and challenging questions.
+
+Every test question — section-level and global — must have:
 - one clear question
 - four distinct plausible options
 - exactly one correct answer
@@ -312,45 +382,27 @@ However, never infer additional anatomy, functions, relationships, labels, termi
 
 If a visual is unclear or unreadable, do not guess what it contains.
 
-VISUAL LEARNING RECOMMENDATIONS:
-When a concept would be significantly easier for a student to understand with a visual, recommend an educational visual.
+Some packets include blank practice or "label-it" worksheets: diagrams with empty numbered boxes or blank lines and no answers filled in. These contain NO factual information. Do not treat their numbered blanks as real structures, and do not invent the labels they are asking the student to supply.
 
-Do not recommend visuals merely for decoration.
+USEFUL DIAGRAMS IN THE PACKET:
+The application does NOT generate new illustrations. Instead, it shows the student the packet's OWN diagrams by rendering the actual uploaded PDF pages. Your job here is only to point at which existing PDF page holds the diagram that best helps each concept.
 
-Prefer simple, clear, student-friendly anatomy diagrams rather than realistic medical illustrations.
+When the packet contains a diagram, figure, labeled anatomy illustration, chart, or process diagram that would significantly help a student understand a concept, add an entry to the visuals array that names it and records the page it appears on.
 
-Every recommended visual must use ONLY information explicitly supported by the supplied PDF.
+Do not point at a page merely for decoration, and do not point at blank practice/label-it worksheets (they have no answers).
 
-The visual must not introduce unsupported anatomical structures, functions, relationships, labels, terminology, or medical details.
+For each useful diagram, return:
+- title: the diagram's heading or a short name for it (for example "Air path: 15 stops" or "Right vs left lung")
+- purpose: one sentence on what the student should notice in it
+- visualPrompt: a short description of what the existing packet figure actually shows (not an instruction to generate anything new)
+- sourcePages: the PDF page number(s) where this diagram appears
+- sourceQuotes: exact text near or inside the figure that identifies it (for example its caption or title)
+- type: anatomy_diagram, concept_diagram, or process_diagram
 
-If the supplied PDF provides only limited information about a structure, the recommended visual must show only that supported information.
-
-For each recommended visual, return:
-- title
-- purpose
-- visualPrompt
-- sourcePages
-- sourceQuotes
-- type
-
-The visualPrompt must describe a simple student-friendly educational anatomy diagram using only information explicitly supported by the supplied PDF.
-
-The visualPrompt must instruct the image generator to label only structures and information supported by the supplied PDF and not add unsupported anatomy, functions, relationships, terminology, or medical details.
-
-Only recommend a visual when it would genuinely improve understanding.
-
-If no useful visual is needed, return an empty visuals array.
-
-The application will generate the actual illustration separately.
+Only include a diagram that actually exists in the supplied PDF. If the packet has no useful diagrams, return an empty visuals array.
 
 SOURCE PAGE VIEWING:
-Every visual must include accurate sourcePages and sourceQuotes.
-
-The application will allow the student to click a source-page reference and open the original uploaded PDF page in a zoomable viewer.
-
-Do not recreate, modify, summarize, or invent the source page.
-
-The application displays the original uploaded PDF page.
+Every visuals entry must include accurate sourcePages so the application can render that original PDF page for the student. Do not recreate, modify, summarize, or invent the page; the application displays the real uploaded PDF page.
 
 INSUFFICIENT INFORMATION:
 If the supplied PDF does not provide enough information to create a reliable study package, set insufficientInformation to true.
@@ -371,9 +423,21 @@ Return only JSON matching the supplied response schema.
 Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanations outside the JSON.`    
            }],
           },
-          contents: [{ role: "user", parts: [{ text: `Make the lesson from this extracted PDF text:\n\n${sourceText}` }] }],
+          contents: [{
+            role: "user",
+            parts: [
+              {
+                text: pdfPart
+                  ? "Build the study package from the attached PDF. Read its diagrams and labeled figures as well as its text. The page-numbered text below is provided so your page citations line up with the application's source checks; cite the same page numbers."
+                  : "Make the lesson from this extracted PDF text.",
+              },
+              ...(pdfPart ? [pdfPart] : []),
+              { text: `Page-numbered text:\n\n${sourceText}` },
+            ],
+          }],
           generationConfig: {
             temperature: 0.25,
+            maxOutputTokens: 65_536,
             responseMimeType: "application/json",
             responseSchema: {
               type: "OBJECT",
@@ -411,8 +475,40 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
                           required: ["term", "definition", "evidence"],
                         },
                       },
+                      flashcards: {
+                        type: "ARRAY",
+                        items: {
+                          type: "OBJECT",
+                          properties: {
+                            question: { type: "STRING" },
+                            answer: { type: "STRING" },
+                            sourcePages: { type: "ARRAY", items: { type: "INTEGER" } },
+                            evidence: { type: "ARRAY", items: evidenceSchema },
+                          },
+                          required: ["question", "answer", "sourcePages", "evidence"],
+                        },
+                      },
+                      testQuestions: {
+                        type: "ARRAY",
+                        items: {
+                          type: "OBJECT",
+                          properties: {
+                            topic: { type: "STRING" },
+                            concept: { type: "STRING" },
+                            difficulty: { type: "STRING", enum: ["easy", "medium", "challenging"] },
+                            question: { type: "STRING" },
+                            options: { type: "ARRAY", items: { type: "STRING" } },
+                            correctAnswer: { type: "INTEGER" },
+                            explanation: { type: "STRING" },
+                            sourcePages: { type: "ARRAY", items: { type: "INTEGER" } },
+                            questionEvidence: { type: "ARRAY", items: evidenceSchema },
+                            explanationEvidence: { type: "ARRAY", items: evidenceSchema },
+                          },
+                          required: ["topic", "concept", "difficulty", "question", "options", "correctAnswer", "explanation", "sourcePages", "questionEvidence", "explanationEvidence"],
+                        },
+                      },
                     },
-                    required: ["heading", "sourcePages", "paragraphs", "keyTerms"],
+                    required: ["heading", "sourcePages", "paragraphs", "keyTerms", "flashcards", "testQuestions"],
                   },
                 },
                 rememberThis: {
@@ -548,6 +644,7 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
       !Array.isArray(generated.sections) || !Array.isArray(generated.rememberThis) ||
       !Array.isArray(generated.flashcards) ||
       !Array.isArray(generated.quickTestQuestions) ||
+      !Array.isArray(generated.visuals) ||
       typeof generated.insufficientInformation !== "boolean"
     ) {
       throw new Error("Gemini returned an invalid lesson structure.");
@@ -557,7 +654,8 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
     const sections = generated.insufficientInformation ? [] : generated.sections.flatMap((section) => {
       if (
         typeof section !== "object" || section === null || typeof section.heading !== "string" ||
-        !Array.isArray(section.paragraphs) || !Array.isArray(section.keyTerms)
+        !Array.isArray(section.paragraphs) || !Array.isArray(section.keyTerms) ||
+        !Array.isArray(section.flashcards) || !Array.isArray(section.testQuestions)
       ) return [];
 
       const paragraphs = section.paragraphs.flatMap((paragraph) => {
@@ -566,7 +664,7 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
         if (typeof supportedParagraph.text !== "string" || !supportedParagraph.text.trim()) return [];
         const sourcePages = verifiedEvidencePages(supportedParagraph.evidence, sourceByPage);
         return sourcePages.length ? [{ text: supportedParagraph.text.trim(), sourcePages }] : [];
-      }).slice(0, 4);
+      }).slice(0, 6);
       const keyTerms = section.keyTerms.flatMap((keyTerm) => {
         if (
           typeof keyTerm !== "object" || keyTerm === null ||
@@ -577,6 +675,66 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
           ? [{ term: keyTerm.term.trim(), definition: keyTerm.definition.trim(), sourcePages }]
           : [];
       }).filter((keyTerm) => keyTerm.term && keyTerm.definition).slice(0, 8);
+
+      const sectionFlashcards = section.flashcards.flatMap((item) => {
+        if (
+          typeof item !== "object" || item === null || typeof item.question !== "string" ||
+          typeof item.answer !== "string" || !Array.isArray(item.sourcePages)
+        ) return [];
+
+        const evidencePages = verifiedEvidencePages(item.evidence, sourceByPage);
+        const cardSourcePages = [...new Set(item.sourcePages.filter(
+          (pageNumber): pageNumber is number => typeof pageNumber === "number" &&
+            Number.isInteger(pageNumber) && evidencePages.includes(pageNumber),
+        ))].sort((first, second) => first - second);
+        if (
+          item.question.trim().length < 8 || item.answer.trim().length < 3 ||
+          !cardSourcePages.length || item.question.length > 260 || item.answer.length > 500
+        ) return [];
+
+        return [{ question: item.question.trim(), answer: item.answer.trim(), sourcePages: cardSourcePages }];
+      }).slice(0, 6);
+
+      const sectionTestQuestions = section.testQuestions.flatMap((item) => {
+        if (
+          typeof item !== "object" || item === null || typeof item.topic !== "string" ||
+          typeof item.concept !== "string" ||
+          !(item.difficulty === "easy" || item.difficulty === "medium" || item.difficulty === "challenging") ||
+          typeof item.question !== "string" || !Array.isArray(item.options) ||
+          !item.options.every((option) => typeof option === "string") || item.options.length !== 4 ||
+          typeof item.correctAnswer !== "number" || !Number.isInteger(item.correctAnswer) ||
+          item.correctAnswer < 0 || item.correctAnswer > 3 || typeof item.explanation !== "string" ||
+          !Array.isArray(item.sourcePages)
+        ) return [];
+
+        const questionPages = verifiedEvidencePages(item.questionEvidence, sourceByPage);
+        const explanationPages = verifiedEvidencePages(item.explanationEvidence, sourceByPage);
+        const evidencePages = new Set([...questionPages, ...explanationPages]);
+        const testSourcePages = [...new Set(item.sourcePages.filter(
+          (pageNumber): pageNumber is number => typeof pageNumber === "number" &&
+            Number.isInteger(pageNumber) && evidencePages.has(pageNumber),
+        ))].sort((first, second) => first - second);
+        const options = item.options.map((option) => option.trim());
+
+        if (
+          !item.topic.trim() || !item.concept.trim() || !item.question.trim() ||
+          !item.explanation.trim() || item.question.length > 500 || item.explanation.length > 800 ||
+          !questionPages.length || !explanationPages.length || !testSourcePages.length ||
+          options.some((option) => !option) || new Set(options.map(normalizeEvidenceText)).size !== 4
+        ) return [];
+
+        return [{
+          topic: item.topic.trim(),
+          concept: item.concept.trim(),
+          difficulty: item.difficulty as QuickTestQuestion["difficulty"],
+          question: item.question.trim(),
+          options,
+          correctAnswer: item.correctAnswer,
+          explanation: item.explanation.trim(),
+          sourcePages: testSourcePages,
+        }];
+      }).slice(0, 3);
+
       const sourcePages = [...new Set([...paragraphs, ...keyTerms].flatMap((item) => item.sourcePages))]
         .sort((first, second) => first - second);
 
@@ -586,8 +744,10 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
         paragraphs: paragraphs.map((paragraph) => paragraph.text),
         keyTerms: keyTerms.map(({ term, definition }) => ({ term, definition })),
         sourcePages,
+        flashcards: sectionFlashcards,
+        testQuestions: sectionTestQuestions,
       }];
-    }).slice(0, 6);
+    }).slice(0, 20);
 
     const rememberThis = generated.insufficientInformation ? [] : generated.rememberThis.flatMap((item) => {
       if (typeof item !== "object" || item === null || !("text" in item) || !("evidence" in item)) return [];
@@ -660,6 +820,37 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
     ) === index).slice(0, 5);
     const quickTestQuestions = generatedQuestions.length === 5 ? generatedQuestions : [];
 
+    const visuals = generated.insufficientInformation ? [] : generated.visuals.flatMap((item) => {
+      if (
+        typeof item !== "object" || item === null || typeof item.title !== "string" ||
+        typeof item.purpose !== "string" || typeof item.visualPrompt !== "string" ||
+        !Array.isArray(item.sourcePages) || !Array.isArray(item.sourceQuotes) ||
+        !(item.type === "anatomy_diagram" || item.type === "concept_diagram" || item.type === "process_diagram")
+      ) return [];
+
+      const validSourcePages = item.sourcePages.filter(
+        (pageNumber): pageNumber is number => typeof pageNumber === "number" &&
+          Number.isInteger(pageNumber) && sourceByPage.has(pageNumber)
+      );
+      const validSourceQuotes = item.sourceQuotes.filter(
+        (quote): quote is string => typeof quote === "string" && quote.trim().length > 0
+      );
+
+      if (
+        !item.title.trim() || !item.purpose.trim() || !item.visualPrompt.trim() ||
+        !validSourcePages.length || !validSourceQuotes.length
+      ) return [];
+
+      return [{
+        title: item.title.trim(),
+        purpose: item.purpose.trim(),
+        visualPrompt: item.visualPrompt.trim(),
+        sourcePages: validSourcePages.sort((a, b) => a - b),
+        sourceQuotes: validSourceQuotes,
+        type: item.type,
+      }];
+    }).slice(0, 10);
+
     const lesson: StructuredLesson = {
       title: generated.title.trim(),
       intro: generated.intro.trim(),
@@ -668,6 +859,7 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
       rememberThis,
       flashcards,
       quickTestQuestions,
+      visuals,
       insufficientInformation: generated.insufficientInformation,
     };
 
@@ -682,6 +874,7 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
         rememberThis: [],
         flashcards: [],
         quickTestQuestions: [],
+        visuals: [],
         insufficientInformation: true,
       });
     }
@@ -694,6 +887,7 @@ Never return HTML, SVG, Mermaid, ASCII art, Markdown, commentary, or explanation
       rememberThis: lesson.rememberThis,
       flashcards: lesson.flashcards,
       quickTestQuestions: lesson.quickTestQuestions,
+      visuals: lesson.visuals,
       insufficientInformation: lesson.insufficientInformation,
     });
   } catch (caughtError) {

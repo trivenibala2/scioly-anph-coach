@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Check, FileText, LoaderCircle, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { TopBar } from "../components/TopBar";
 import { useAccount } from "../use-account";
-import { extractPdfPages, type ExtractedPage } from "../pdf-snapshots";
+import { extractPdfPages, readPdfAsBase64, type ExtractedPage } from "../pdf-snapshots";
 import { isLessonResult, type StudyProgress } from "../study-session";
 
 type Week = {
@@ -120,27 +120,44 @@ export default function AdminPage() {
 
     setWorkState("generating");
     try {
-      const lessonResponse = await fetch("/api/lesson", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pages }),
-      });
-      const lesson: unknown = await lessonResponse.json();
-      if (!lessonResponse.ok || !isLessonResult(lesson)) throw new Error(errorMessage(lesson, "We couldn’t create a lesson just now."));
-
+      // Step 1: persist the PDF and extracted text first, so a slow or failed
+      // generation never loses the upload. The week starts in "processing".
       const form = new FormData();
       form.append("file", selectedFile);
       form.append("weekNumber", String(number));
       form.append("pages", JSON.stringify(pages));
-      form.append("lesson", JSON.stringify(lesson));
       const saveResponse = await fetch("/api/study", { method: "POST", body: form });
       const saved = (await saveResponse.json()) as { studyId?: string; error?: string };
-      if (!saveResponse.ok || !saved.studyId) throw new Error(errorMessage(saved, "The lesson was created, but could not be saved."));
+      if (!saveResponse.ok || !saved.studyId) throw new Error(errorMessage(saved, "We couldn’t save the uploaded PDF."));
+      const studyId = saved.studyId;
 
-      router.push(`/study/${saved.studyId}/lesson`);
+      // Step 2: generate the lesson. The PDF is sent to Gemini directly so it can read the
+      // diagrams and labeled figures; the extracted text is used to verify evidence quotes.
+      const pdfData = await readPdfAsBase64(selectedFile);
+      const lessonResponse = await fetch("/api/lesson", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pages, pdf: { data: pdfData, mimeType: "application/pdf" } }),
+      });
+      const lesson: unknown = await lessonResponse.json();
+      if (!lessonResponse.ok || !isLessonResult(lesson)) {
+        throw new Error(errorMessage(lesson, "The PDF was saved, but we couldn’t generate the lesson. Try generating again from the week list."));
+      }
+
+      // Step 3: attach the generated lesson and mark the week ready.
+      const finalizeResponse = await fetch(`/api/study/${studyId}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lesson }),
+      });
+      const finalized = (await finalizeResponse.json()) as { studyId?: string; error?: string };
+      if (!finalizeResponse.ok || !finalized.studyId) throw new Error(errorMessage(finalized, "The lesson was created, but could not be saved."));
+
+      router.push(`/study/${studyId}/lesson`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "We couldn’t create a lesson just now. Please try again.");
       setWorkState("ready");
+      void loadWeeks();
     }
   }
 
