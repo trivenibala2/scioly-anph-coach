@@ -1,3 +1,5 @@
+import { requireAccount } from "../../../lib/auth";
+
 type SourcePage = {
   pageNumber: number;
   text: string;
@@ -42,6 +44,7 @@ type GeneratedSection = {
 type StructuredLesson = {
   title: string;
   intro: string;
+  introSourcePages: number[];
   sections: LessonSection[];
   rememberThis: string[];
   flashcards: StudyFlashcard[];
@@ -113,6 +116,10 @@ const MAX_TEXT_LENGTH = 80_000;
 const MAX_PAGES = 200;
 
 export async function POST(request: Request) {
+  if (!requireAccount(request, "admin")) {
+    return Response.json({ error: "Only the admin can generate lessons." }, { status: 403 });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json(
@@ -416,6 +423,7 @@ export async function POST(request: Request) {
     const lesson: StructuredLesson = {
       title: generated.title.trim(),
       intro: generated.intro.trim(),
+      introSourcePages: introEvidence,
       sections,
       rememberThis,
       flashcards,
@@ -429,6 +437,7 @@ export async function POST(request: Request) {
       return Response.json({
         title: "More source detail needed",
         intro: "The uploaded material does not provide enough directly verifiable information to build a cited lesson. Try a text-based packet with more explanation.",
+        introSourcePages: [],
         sections: [],
         rememberThis: [],
         flashcards: [],
@@ -440,6 +449,7 @@ export async function POST(request: Request) {
     return Response.json({
       title: lesson.title,
       intro: lesson.intro,
+      introSourcePages: lesson.introSourcePages,
       sections: lesson.sections,
       rememberThis: lesson.rememberThis,
       flashcards: lesson.flashcards,
