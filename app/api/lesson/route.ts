@@ -61,18 +61,30 @@ function normalizeEvidenceText(text: string) {
   return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-// A quote counts as verified when the page text contains it exactly, OR contains any run of five
-// consecutive words from it. The tolerant run handles the small differences between the model's
-// transcription (it also reads the PDF image) and the pdfjs-extracted text — differing spacing,
-// subscripts (O₂), units (µm), or an added/dropped word at the edges — while still requiring a
-// real verbatim span from the page, which is hard to fabricate.
-function quoteMatchesPage(quoteNorm: string, pageNorm: string) {
+type PreparedPage = { norm: string; words: Set<string> };
+
+// A quote counts as verified when the page contains it exactly, OR contains a five-word run from
+// it, OR (fallback) most of its meaningful words appear on the page. The run handles small
+// transcription differences (spacing, subscripts like O₂, units like µm). The word-overlap
+// fallback handles PDFs whose text layer mangles ligatures — e.g. "practice" extracted as
+// "prac ] ce", "National" as "Na ] onal" — where exact/run matching fails even though the quote
+// genuinely comes from the page. All three still require real words from the page, so a fabricated
+// quote (whose words are not on the page) is rejected.
+function quoteMatchesPage(quoteNorm: string, page: PreparedPage) {
   if (!quoteNorm) return false;
-  if (pageNorm.includes(quoteNorm)) return true;
+  if (page.norm.includes(quoteNorm)) return true;
+
   const words = quoteNorm.split(" ").filter(Boolean);
-  if (words.length < 5) return false;
-  for (let index = 0; index + 5 <= words.length; index += 1) {
-    if (pageNorm.includes(words.slice(index, index + 5).join(" "))) return true;
+  if (words.length >= 5) {
+    for (let index = 0; index + 5 <= words.length; index += 1) {
+      if (page.norm.includes(words.slice(index, index + 5).join(" "))) return true;
+    }
+  }
+
+  const meaningful = words.filter((word) => word.length >= 3);
+  if (meaningful.length >= 4) {
+    const matched = meaningful.filter((word) => page.words.has(word)).length;
+    if (matched >= 4 && matched / meaningful.length >= 0.6) return true;
   }
   return false;
 }
@@ -80,15 +92,16 @@ function quoteMatchesPage(quoteNorm: string, pageNorm: string) {
 function verifiedEvidencePages(value: unknown, sourceByPage: Map<number, string>) {
   if (!Array.isArray(value)) return [];
 
-  const normalizedPageCache = new Map<number, string>();
-  const normalizedPage = (pageNumber: number) => {
-    let pageNorm = normalizedPageCache.get(pageNumber);
-    if (pageNorm === undefined) {
+  const pageCache = new Map<number, PreparedPage>();
+  const preparedPage = (pageNumber: number) => {
+    let prepared = pageCache.get(pageNumber);
+    if (!prepared) {
       const pageText = sourceByPage.get(pageNumber);
-      pageNorm = pageText ? normalizeEvidenceText(pageText) : "";
-      normalizedPageCache.set(pageNumber, pageNorm);
+      const norm = pageText ? normalizeEvidenceText(pageText) : "";
+      prepared = { norm, words: new Set(norm.split(" ").filter(Boolean)) };
+      pageCache.set(pageNumber, prepared);
     }
-    return pageNorm;
+    return prepared;
   };
 
   const verifiedPages = new Set<number>();
@@ -105,13 +118,13 @@ function verifiedEvidencePages(value: unknown, sourceByPage: Map<number, string>
 
     // Prefer the cited page, but if the quote is not there, find the page that actually contains
     // it. This self-corrects small page-number mistakes instead of dropping a real quote.
-    if (sourceByPage.has(evidence.pageNumber) && quoteMatchesPage(quote, normalizedPage(evidence.pageNumber))) {
+    if (sourceByPage.has(evidence.pageNumber) && quoteMatchesPage(quote, preparedPage(evidence.pageNumber))) {
       verifiedPages.add(evidence.pageNumber);
       continue;
     }
     for (const pageNumber of sourceByPage.keys()) {
       if (pageNumber === evidence.pageNumber) continue;
-      if (quoteMatchesPage(quote, normalizedPage(pageNumber))) {
+      if (quoteMatchesPage(quote, preparedPage(pageNumber))) {
         verifiedPages.add(pageNumber);
         break;
       }
