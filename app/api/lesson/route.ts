@@ -131,7 +131,7 @@ type GeminiResponse = {
 
 const MAX_TEXT_LENGTH = 80_000;
 const MAX_PAGES = 200;
-const MAX_MODULES = 20;
+const MAX_MODULES = 30;
 const MODULE_CONCURRENCY = 5;
 
 class GeminiFailure extends Error {
@@ -257,6 +257,8 @@ const quickTestSchema = {
 
 const BASE_RULES = `You are a careful Science Olympiad Anatomy & Physiology teacher building a study package from the supplied PDF, for students around age 13.
 
+GOAL: A student should be able to learn EVERYTHING in the packet from your lesson alone, without ever opening the original PDF. So include every fact, term, list item, and table row the packet teaches — completeness matters as much as clarity. Never leave out a supported detail assuming the student will read the original. (Completeness means not omitting what the PDF says; it never means adding anything the PDF does not say.)
+
 SOURCE AUTHORITY: The supplied PDF is the only source. Use only facts explicitly supported by it. Never add outside knowledge, importance words such as "vital" or "crucial", or any fact, number, cause, or relationship the PDF does not state. If the PDF only names a term without explaining it, do not add its meaning.
 
 READING LEVEL (most important style rule): Write for an average 13-year-old (grade 7 to 8). Use short, plain sentences of about 12 to 18 words. Prefer everyday words over textbook words when the meaning is the same (for example "makes" over "produces", "job" over "function", "tiny" over "microscopic"). When a scientific term is needed because the PDF teaches it, say its plain meaning first, then the term (for example "the main breathing muscle under your lungs, called the diaphragm"). Use a warm second-person voice ("your lungs", "you breathe in"). Keep paragraphs short (2 to 4 sentences). Simplifying must NEVER add or change a fact; it only rewords the same supported fact, and the evidence quote must still support the simpler sentence.
@@ -275,7 +277,7 @@ PRACTICE MATERIAL IS NOT A MODULE: The packet's practice questions — its end-o
 
 - title: a short, student-friendly lesson title.
 - intro: a short, friendly overview (a few sentences) of everything the student will learn, written at a 13-year-old level. Provide introEvidence quotes that support it.
-- modules: break the ENTIRE packet into teaching modules, in the packet's own order. Follow the packet's modules and numbered subsections — one module per numbered subsection, or per small group of closely related subsections. Cover every module, subsection, table, and diagram; do not skip any. Prefer many short modules over a few long ones. For each module give: heading (echo the packet's own title when possible, for example "Module 1 · Why We Breathe", "Module 2 · The Trachea, Bronchial Tree and Alveoli", "The Larynx — Voice Box"), focus (one sentence on what it teaches), and sourcePages (the PDF page numbers it draws from).
+- modules: create ONE module for EACH numbered subsection of the packet (for example 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, then 2.1, 2.2, ... then 3.1, ...). Do NOT merge several subsections into one module, and do NOT create just one big module per top-level Module — that loses detail. If the packet's Module 1 has eight numbered subsections, produce eight separate modules for it. Keep the packet's order. Use the subsection's own number and title as the heading (for example "1.3 The Jobs of the Respiratory System", "1.5 The Nose and Nasal Cavity", "1.7 The Pharynx"). Give each a focus (one sentence) and sourcePages (the PDF pages it draws from). It is normal and good to have 12 to 25 modules for a full packet.
 - rememberThis: 2 to 4 short whole-packet takeaways, each with an evidence quote.
 - insufficientInformation: set true ONLY if the packet lacks enough verifiable content to teach. If true, say so in the intro and return empty modules and rememberThis.`;
 
@@ -293,11 +295,11 @@ Module heading: "${heading}"
 What it teaches: ${focus}
 It draws mainly from PDF pages: ${pageHint}.
 
-Teach only this module's content; do not cover other modules. Cover ALL of the content on this module's pages — do not skip any sub-topic, list, table, labeled diagram, or "stop and check" item that falls in this module. For example, if this module includes the air path from the nose to the alveoli, name every stop; if it includes the bronchial tree or the alveoli, teach each part the packet names. Produce:
-- paragraphs: 3 to 6 short, kid-friendly explanatory paragraphs that together cover everything this module teaches, each with an evidence quote. Convert any relevant table rows and diagram labels into clear sentences so no fact is lost. Include the packet's own "Remember it" mnemonic or "Test tip" for this topic when present (do not invent new ones).
+This module is ONE numbered subsection of the packet. Represent that subsection FULLY and faithfully — do not summarize it down to a few sentences. Teach every point it makes: every sub-topic, every item in every list, and EVERY ROW of any table (for example, if the subsection has a table of the respiratory system's jobs, teach each job; if it has a table of the pharynx's three parts, teach each part and what it carries). Name every labeled part of any diagram in this subsection. Do not drop a detail just to be brief; it is fine to be thorough here because each subsection is short on its own. Produce:
+- paragraphs: 3 to 8 explanatory paragraphs (kid-friendly, short sentences) that together cover EVERYTHING in this subsection, each with an evidence quote. Turn every table row and every diagram label into a clear sentence so no fact is lost. Include the packet's own "Remember it" mnemonic or "Test tip" for this topic when present (do not invent new ones).
 - keyTerms: the important terms this module teaches, each with a one-sentence plain definition and evidence. Only include terms the PDF defines or explains.
-- flashcards: at least 5 cards (aim for 5 to 8) testing this module's key concepts, each with a short answer, sourcePages, and evidence. Build them from this module's practice material — the packet's own flashcards, its quiz items, its "Stop and check" questions, and its practice diagrams (for example turn the air-path "fill in the stops" practice into cards for each stop) — then add more from this module's content so there are at least 5. Each card must test a different concept; never pad with trivial or duplicate cards.
-- testQuestions: at least 5 multiple-choice questions (aim for 5 to 6) on this module (four options, one correct), each with topic, concept, difficulty, explanation, sourcePages, questionEvidence, and explanationEvidence. Build them from this module's practice material: adapt the packet's quiz questions and "Stop and check" questions for this topic and use the answer key for the correct option and explanation; add more from this module's content so there are at least 5 distinct ones. Only use facts this module's pages support.
+- flashcards: at least 5 cards (aim for 5 to 8) that TOGETHER cover every key fact, term, and table row in this subsection, so a student who masters these cards has mastered the subsection with nothing left out. Each card has a short answer, sourcePages, and evidence. Build them from this subsection's practice material — the packet's own flashcards, its quiz items, its "Stop and check" questions, and its practice diagrams (for example turn the air-path "fill in the stops" practice into a card for each stop) — then add more from the subsection's content until every important point is covered. Each card tests a different point; never pad with trivial or duplicate cards.
+- testQuestions: at least 5 multiple-choice questions (aim for 5 to 6) that check understanding across this subsection's main points (four options, one correct), each with topic, concept, difficulty, explanation, sourcePages, questionEvidence, and explanationEvidence. Build them from this subsection's practice material: adapt the packet's quiz questions and "Stop and check" questions for this topic and use the answer key for the correct option and explanation; add more from the subsection's content so the questions span its key facts, not just one. Only use facts this subsection's pages support.
 - visuals: if this module has a useful diagram in the packet, add one entry naming it and the page it appears on (title, purpose, visualPrompt describing what the existing figure shows, sourcePages, sourceQuotes copied from its caption/label, type). Ignore blank practice worksheets. If there is no useful diagram, return an empty visuals array.`;
 }
 
@@ -402,7 +404,7 @@ function processSection(raw: unknown, heading: string, sourceByPage: Map<number,
     if (typeof supported.text !== "string" || !supported.text.trim()) return [];
     const sourcePages = verifiedEvidencePages(supported.evidence, sourceByPage);
     return sourcePages.length ? [{ text: supported.text.trim(), sourcePages }] : [];
-  }).slice(0, 6);
+  }).slice(0, 8);
 
   const keyTerms = data.keyTerms.flatMap((keyTerm) => {
     if (

@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pulse Notes | Science Olympiad A&P Coach",
+  title: "ScienceOly | Science Olympiad A&P Coach",
   description: "Turn your Science Olympiad Anatomy & Physiology study packet into a short, source-cited lesson.",
 };
 

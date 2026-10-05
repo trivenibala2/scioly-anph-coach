@@ -5,7 +5,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export type AccountRole = "admin" | "student";
 export type AuthenticatedAccount = { username: string; role: AccountRole };
 
-const COOKIE_NAME = "pulse_account_session";
+const COOKIE_NAME = "scienceoly_account_session";
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 12;
 
 function configuredAccounts() {
@@ -33,8 +33,8 @@ function sign(payload: string) {
 }
 
 function secureEqual(first: string, second: string) {
-  const firstHash = createHmac("sha256", "pulse-account-compare").update(first).digest();
-  const secondHash = createHmac("sha256", "pulse-account-compare").update(second).digest();
+  const firstHash = createHmac("sha256", "scienceoly-account-compare").update(first).digest();
+  const secondHash = createHmac("sha256", "scienceoly-account-compare").update(second).digest();
   return timingSafeEqual(firstHash, secondHash);
 }
 

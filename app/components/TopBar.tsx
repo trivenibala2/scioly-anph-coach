@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, HeartPulse, LogOut } from "lucide-react";
+import { ArrowLeft, Dna, LogOut } from "lucide-react";
 
 type TopBarProps = {
   homeHref?: string;
@@ -15,9 +15,9 @@ type TopBarProps = {
 export function TopBar({ homeHref = "/", backHref, backLabel = "Back", username, roleLabel, onSignOut }: TopBarProps) {
   return (
     <header className="topbar">
-      <Link className="brand" href={homeHref} aria-label="Pulse Notes home">
-        <span className="brand-mark"><HeartPulse size={20} strokeWidth={2.2} /></span>
-        <span>pulse<span className="brand-light">notes</span></span>
+      <Link className="brand" href={homeHref} aria-label="ScienceOly home">
+        <span className="brand-mark"><Dna size={20} strokeWidth={2.2} /></span>
+        <span>science<span className="brand-light">oly</span></span>
       </Link>
       <div className="topbar-actions">
         {backHref && (

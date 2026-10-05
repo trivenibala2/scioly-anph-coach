@@ -96,7 +96,7 @@ export type StudyPackage = {
 };
 
 // sessionStorage is only an offline convenience copy. Supabase is the source of truth.
-const CACHE_PREFIX = "pulse-notes-study-";
+const CACHE_PREFIX = "scienceoly-study-";
 
 export function cacheStudy(study: StudyPackage) {
   try {
