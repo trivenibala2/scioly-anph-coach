@@ -16,6 +16,7 @@ type LessonSection = {
   sourcePages: number[];
   flashcards: StudyFlashcard[];
   testQuestions: QuickTestQuestion[];
+  visuals: LessonVisual[];
 };
 
 type StudyFlashcard = {
@@ -268,9 +269,13 @@ OUTPUT: Return only JSON matching the supplied schema. No HTML, Markdown, or com
 
 const OUTLINE_TASK = `TASK: Create the lesson OUTLINE for the WHOLE packet. Do not write the module bodies yet.
 
+COVER EVERYTHING — THIS IS CRITICAL: Your module list must span the ENTIRE teaching portion of the packet from the first content page to the last, with NO gaps. Walk through the packet page by page in order. Every page that TEACHES content must belong to a module. If the packet is organized as "Module 1", "Module 2", "Module 3" (or more), you MUST include ALL of them — never jump from Module 1 to Module 3 and skip Module 2. Before you finish, check that the sourcePages of your teaching modules together cover the whole teaching range with none missing in the middle.
+
+PRACTICE MATERIAL IS NOT A MODULE: The packet's practice questions — its end-of-packet quiz, the answer key, the "Stop and check" questions, and the blank practice/label-it worksheets (for example "Practice A: fill in the 15 stops", "Practice B: label the lungs") — are NOT teaching content. Do NOT create a reading module for them and do NOT list their pages as a module's sourcePages. Instead, that practice material is used only to build the flashcards and the test questions in the later steps. So exclude those pages from the modules here, but remember they exist so the quiz and flashcards can be built from them.
+
 - title: a short, student-friendly lesson title.
 - intro: a short, friendly overview (a few sentences) of everything the student will learn, written at a 13-year-old level. Provide introEvidence quotes that support it.
-- modules: break the ENTIRE packet into teaching modules, in the packet's own order. Follow the packet's modules and numbered subsections — one module per numbered subsection, or per small group of closely related subsections. Cover every module and major topic; do not skip tables or sections. Prefer many short modules over a few long ones. For each module give: heading (echo the packet's own title when possible, for example "Module 1 · Why We Breathe" or "The Larynx — Voice Box"), focus (one sentence on what it teaches), and sourcePages (the PDF page numbers it draws from).
+- modules: break the ENTIRE packet into teaching modules, in the packet's own order. Follow the packet's modules and numbered subsections — one module per numbered subsection, or per small group of closely related subsections. Cover every module, subsection, table, and diagram; do not skip any. Prefer many short modules over a few long ones. For each module give: heading (echo the packet's own title when possible, for example "Module 1 · Why We Breathe", "Module 2 · The Trachea, Bronchial Tree and Alveoli", "The Larynx — Voice Box"), focus (one sentence on what it teaches), and sourcePages (the PDF page numbers it draws from).
 - rememberThis: 2 to 4 short whole-packet takeaways, each with an evidence quote.
 - insufficientInformation: set true ONLY if the packet lacks enough verifiable content to teach. If true, say so in the intro and return empty modules and rememberThis.`;
 
@@ -288,11 +293,11 @@ Module heading: "${heading}"
 What it teaches: ${focus}
 It draws mainly from PDF pages: ${pageHint}.
 
-Teach only this module's content; do not cover other modules. Produce:
-- paragraphs: 2 to 5 short, kid-friendly explanatory paragraphs, each with an evidence quote. Convert any relevant table rows into clear sentences so no fact is lost. Include the packet's own "Remember it" mnemonic or "Test tip" for this topic when present (do not invent new ones).
+Teach only this module's content; do not cover other modules. Cover ALL of the content on this module's pages — do not skip any sub-topic, list, table, labeled diagram, or "stop and check" item that falls in this module. For example, if this module includes the air path from the nose to the alveoli, name every stop; if it includes the bronchial tree or the alveoli, teach each part the packet names. Produce:
+- paragraphs: 3 to 6 short, kid-friendly explanatory paragraphs that together cover everything this module teaches, each with an evidence quote. Convert any relevant table rows and diagram labels into clear sentences so no fact is lost. Include the packet's own "Remember it" mnemonic or "Test tip" for this topic when present (do not invent new ones).
 - keyTerms: the important terms this module teaches, each with a one-sentence plain definition and evidence. Only include terms the PDF defines or explains.
-- flashcards: at least 5 cards (aim for 5 to 8) testing this module's key concepts, each with a short answer, sourcePages, and evidence. Prefer mining the packet's own flashcards or quiz items for this topic, then add more from this module's content so there are at least 5. Each card must test a different concept; never pad with trivial or duplicate cards.
-- testQuestions: at least 5 multiple-choice questions (aim for 5 to 6) on this module (four options, one correct), each with topic, concept, difficulty, explanation, sourcePages, questionEvidence, and explanationEvidence. When the packet's quiz and answer key cover this module, adapt those questions and use the answer key for the correct option and explanation; add more questions from this module's content so there are at least 5 distinct ones. Only use facts this module's pages support.
+- flashcards: at least 5 cards (aim for 5 to 8) testing this module's key concepts, each with a short answer, sourcePages, and evidence. Build them from this module's practice material — the packet's own flashcards, its quiz items, its "Stop and check" questions, and its practice diagrams (for example turn the air-path "fill in the stops" practice into cards for each stop) — then add more from this module's content so there are at least 5. Each card must test a different concept; never pad with trivial or duplicate cards.
+- testQuestions: at least 5 multiple-choice questions (aim for 5 to 6) on this module (four options, one correct), each with topic, concept, difficulty, explanation, sourcePages, questionEvidence, and explanationEvidence. Build them from this module's practice material: adapt the packet's quiz questions and "Stop and check" questions for this topic and use the answer key for the correct option and explanation; add more from this module's content so there are at least 5 distinct ones. Only use facts this module's pages support.
 - visuals: if this module has a useful diagram in the packet, add one entry naming it and the page it appears on (title, purpose, visualPrompt describing what the existing figure shows, sourcePages, sourceQuotes copied from its caption/label, type). Ignore blank practice worksheets. If there is no useful diagram, return an empty visuals array.`;
 }
 
@@ -381,7 +386,7 @@ async function requestGeminiJson(
   return JSON.parse(responseText) as unknown;
 }
 
-function processSection(raw: unknown, heading: string, sourceByPage: Map<number, string>): { section: LessonSection; visuals: LessonVisual[] } | null {
+function processSection(raw: unknown, heading: string, sourceByPage: Map<number, string>): LessonSection | null {
   if (typeof raw !== "object" || raw === null) return null;
   const data = raw as {
     paragraphs?: unknown; keyTerms?: unknown; flashcards?: unknown; testQuestions?: unknown; visuals?: unknown;
@@ -424,18 +429,19 @@ function processSection(raw: unknown, heading: string, sourceByPage: Map<number,
     .slice(0, 6);
   const visuals = Array.isArray(data.visuals) ? processVisuals(data.visuals, sourceByPage) : [];
 
-  const sourcePages = [...new Set(paragraphs.flatMap((item) => item.sourcePages))].sort((first, second) => first - second);
+  const sourcePages = [...new Set([
+    ...paragraphs.flatMap((item) => item.sourcePages),
+    ...visuals.flatMap((visual) => visual.sourcePages),
+  ])].sort((first, second) => first - second);
   if (!heading.trim() || !paragraphs.length || !sourcePages.length) return null;
 
   return {
-    section: {
-      heading: heading.trim(),
-      paragraphs: paragraphs.map((paragraph) => paragraph.text),
-      keyTerms,
-      sourcePages,
-      flashcards,
-      testQuestions,
-    },
+    heading: heading.trim(),
+    paragraphs: paragraphs.map((paragraph) => paragraph.text),
+    keyTerms,
+    sourcePages,
+    flashcards,
+    testQuestions,
     visuals,
   };
 }
@@ -685,31 +691,34 @@ export async function POST(request: Request) {
     }
 
     // Pass 2: each module in parallel (bounded), so no single response can grow large enough
-    // to truncate. A module that fails or returns nothing verifiable is skipped, not fatal.
+    // to truncate. Each module is attempted up to twice so a transient failure or a response
+    // that momentarily fails verification does not silently drop a whole module of the packet.
     let moduleFailure: GeminiFailure | null = null;
     const moduleResults = await mapWithConcurrency(moduleStubs, MODULE_CONCURRENCY, async (stub) => {
-      try {
-        const raw = await requestGeminiJson(
-          models, apiKey, BASE_RULES, makeParts(moduleTask(stub.heading, stub.focus, stub.sourcePages)), moduleSchema, 32_768,
-        );
-        return processSection(raw, stub.heading, sourceByPage);
-      } catch (error) {
-        if (error instanceof GeminiFailure) moduleFailure = error;
-        console.error(`Module "${stub.heading}" failed:`, error instanceof Error ? error.message : "unknown");
-        return null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const raw = await requestGeminiJson(
+            models, apiKey, BASE_RULES, makeParts(moduleTask(stub.heading, stub.focus, stub.sourcePages)), moduleSchema, 32_768,
+          );
+          const section = processSection(raw, stub.heading, sourceByPage);
+          if (section) return section;
+        } catch (error) {
+          if (error instanceof GeminiFailure) moduleFailure = error;
+          console.error(`Module "${stub.heading}" attempt ${attempt + 1} failed:`, error instanceof Error ? error.message : "unknown");
+        }
       }
+      console.error(`Module "${stub.heading}" produced no verifiable content after retry.`);
+      return null;
     });
 
-    const sections = moduleResults.flatMap((result) => (result ? [result.section] : []));
+    const sections = moduleResults.flatMap((section) => (section ? [section] : []));
     if (!sections.length) {
       if (moduleFailure) throw moduleFailure;
       return Response.json(INSUFFICIENT_RESPONSE);
     }
 
-    // Aggregate the per-module diagrams and flashcards into the top-level arrays the app uses.
-    const visuals = moduleResults
-      .flatMap((result) => (result ? result.visuals : []))
-      .slice(0, 12);
+    // Aggregate the per-module diagrams into the top-level array the app uses for page rendering.
+    const visuals = sections.flatMap((section) => section.visuals).slice(0, 12);
     // The global deck is validated to at most 10 cards; per-module decks (in sections) are uncapped.
     const flashcards = sections
       .flatMap((section) => section.flashcards)

@@ -301,13 +301,11 @@ export function PaginatedLesson({
   const isSummaryPage = currentPage === totalPages - 1 && lesson.rememberThis.length > 0;
   const currentSection = !isIntroPage && !isSummaryPage ? lesson.sections[currentPage - 1] : null;
 
-  // The AI's visual recommendations point at the PDF pages that carry the most useful
-  // diagrams. We render those actual (persisted) PDF pages first, then any other cited pages.
-  const diagramPagesFor = (sourcePages: number[]) => {
-    const recommended = (lesson.visuals ?? [])
-      .flatMap((visual) => visual.sourcePages)
-      .filter((page) => sourcePages.includes(page));
-    return [...new Set([...recommended, ...sourcePages])];
+  // Each module names the packet pages that hold its most useful diagrams. We render those actual
+  // (persisted) PDF pages first, then the module's other cited pages.
+  const diagramPagesFor = (section: LessonResult["sections"][number]) => {
+    const fromVisuals = (section.visuals ?? []).flatMap((visual) => visual.sourcePages);
+    return [...new Set([...fromVisuals, ...section.sourcePages])];
   };
 
   const handleNext = () => {
@@ -390,7 +388,7 @@ export function PaginatedLesson({
               <h4>{currentSection.heading}</h4>
             </div>
 
-            {diagramPagesFor(currentSection.sourcePages).some((pageNumber) =>
+            {diagramPagesFor(currentSection).some((pageNumber) =>
               pageSnapshots.some((snapshot) => snapshot.pageNumber === pageNumber)
             ) && (
               <div className="source-visuals source-visuals-lead">
@@ -398,7 +396,7 @@ export function PaginatedLesson({
                   <ImageIcon size={14} /> Diagrams from your packet <span className="zoom-hint">· tap to zoom</span>
                 </div>
                 <div className="visual-grid">
-                  {diagramPagesFor(currentSection.sourcePages)
+                  {diagramPagesFor(currentSection)
                     .slice(0, 2)
                     .map((pageNumber) => {
                       const snapshot = pageSnapshots.find((item) => item.pageNumber === pageNumber);
