@@ -701,7 +701,9 @@ export async function POST(request: Request) {
     // Only give up before generating when the model named no modules at all. We do NOT gate on the
     // intro's quotes verifying (intros are paraphrased overviews) or on the model's own
     // insufficientInformation flag — the real test is whether the modules produce verifiable content.
+    console.error(`[lesson] outline ok: title=${JSON.stringify(title)} modules=${moduleStubs.length} introPages=${introSourcePages.length} pdfSent=${Boolean(pdfPart)} pages=${pages.length}`);
     if (!moduleStubs.length) {
+      console.error("[lesson] INSUFFICIENT: outline returned no modules. First 500 chars of outline:", JSON.stringify(outline).slice(0, 500));
       return Response.json(INSUFFICIENT_RESPONSE);
     }
 
@@ -727,8 +729,10 @@ export async function POST(request: Request) {
     });
 
     const sections = moduleResults.flatMap((section) => (section ? [section] : []));
+    console.error(`[lesson] modules built: ${sections.length}/${moduleStubs.length}; moduleFailure=${moduleFailure ? "yes" : "no"}`);
     if (!sections.length) {
       if (moduleFailure) throw moduleFailure;
+      console.error("[lesson] INSUFFICIENT: outline had modules but none produced any text paragraphs.");
       return Response.json(INSUFFICIENT_RESPONSE);
     }
 
