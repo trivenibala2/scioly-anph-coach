@@ -401,43 +401,60 @@ async function requestGeminiJson(
   return JSON.parse(responseText) as unknown;
 }
 
-function processSection(raw: unknown, heading: string, sourceByPage: Map<number, string>): LessonSection | null {
-  if (typeof raw !== "object" || raw === null) return null;
+// Resolves the citation pages for an item. Verification is used to pick the best pages, but it is
+// NOT a gate: because the model is given the real PDF (text + images), its content is grounded even
+// when a quote fails to match the (sometimes ligature-corrupted) extracted text. So we fall back to
+// the model's own cited pages, then to the module's pages, so content is never dropped for lack of
+// a matching quote — it just loses its precise citation.
+function resolvePages(
+  evidence: unknown,
+  modelPages: unknown,
+  fallbackPages: number[],
+  sourceByPage: Map<number, string>,
+): number[] {
+  const verified = verifiedEvidencePages(evidence, sourceByPage);
+  const validModel = Array.isArray(modelPages)
+    ? [...new Set(modelPages.filter((page): page is number => typeof page === "number" && Number.isInteger(page) && sourceByPage.has(page)))].sort((a, b) => a - b)
+    : [];
+  const matched = validModel.filter((page) => verified.includes(page));
+  if (matched.length) return matched;
+  if (verified.length) return verified;
+  if (validModel.length) return validModel;
+  return fallbackPages;
+}
+
+function processSection(raw: unknown, heading: string, modulePages: number[], sourceByPage: Map<number, string>): LessonSection | null {
+  if (typeof raw !== "object" || raw === null || !heading.trim()) return null;
   const data = raw as {
     paragraphs?: unknown; keyTerms?: unknown; flashcards?: unknown; testQuestions?: unknown; visuals?: unknown;
   };
-  if (
-    !Array.isArray(data.paragraphs) || !Array.isArray(data.keyTerms) ||
-    !Array.isArray(data.flashcards) || !Array.isArray(data.testQuestions)
-  ) return null;
+  if (!Array.isArray(data.paragraphs)) return null;
+
+  const fallbackPages = modulePages.filter((page) => sourceByPage.has(page));
 
   const paragraphs = data.paragraphs.flatMap((paragraph) => {
-    if (typeof paragraph !== "object" || paragraph === null || !("text" in paragraph) || !("evidence" in paragraph)) return [];
-    const supported = paragraph as { text: unknown; evidence: unknown };
+    if (typeof paragraph !== "object" || paragraph === null || !("text" in paragraph)) return [];
+    const supported = paragraph as { text: unknown; evidence?: unknown };
     if (typeof supported.text !== "string" || !supported.text.trim()) return [];
-    const sourcePages = verifiedEvidencePages(supported.evidence, sourceByPage);
-    return sourcePages.length ? [{ text: supported.text.trim(), sourcePages }] : [];
+    const sourcePages = resolvePages(supported.evidence, undefined, fallbackPages, sourceByPage);
+    return [{ text: supported.text.trim(), sourcePages }];
   }).slice(0, 8);
 
-  const keyTerms = data.keyTerms.flatMap((keyTerm) => {
-    if (
-      typeof keyTerm !== "object" || keyTerm === null ||
-      !("term" in keyTerm) || !("definition" in keyTerm) || !("evidence" in keyTerm)
-    ) return [];
-    const term = keyTerm as { term: unknown; definition: unknown; evidence: unknown };
-    if (typeof term.term !== "string" || typeof term.definition !== "string") return [];
-    const sourcePages = verifiedEvidencePages(term.evidence, sourceByPage);
-    return sourcePages.length ? [{ term: term.term.trim(), definition: term.definition.trim() }] : [];
-  }).filter((keyTerm) => keyTerm.term && keyTerm.definition).slice(0, 8);
+  const keyTerms = (Array.isArray(data.keyTerms) ? data.keyTerms : []).flatMap((keyTerm) => {
+    if (typeof keyTerm !== "object" || keyTerm === null || !("term" in keyTerm) || !("definition" in keyTerm)) return [];
+    const term = keyTerm as { term: unknown; definition: unknown };
+    if (typeof term.term !== "string" || typeof term.definition !== "string" || !term.term.trim() || !term.definition.trim()) return [];
+    return [{ term: term.term.trim(), definition: term.definition.trim() }];
+  }).slice(0, 8);
 
-  const flashcards = data.flashcards
-    .flatMap((item) => processFlashcard(item, sourceByPage))
+  const flashcards = (Array.isArray(data.flashcards) ? data.flashcards : [])
+    .flatMap((item) => processFlashcard(item, fallbackPages, sourceByPage))
     .filter((card, index, cards) => cards.findIndex(
       (candidate) => normalizeEvidenceText(candidate.question) === normalizeEvidenceText(card.question),
     ) === index)
     .slice(0, 8);
-  const testQuestions = data.testQuestions
-    .flatMap((item) => processTestQuestion(item, sourceByPage))
+  const testQuestions = (Array.isArray(data.testQuestions) ? data.testQuestions : [])
+    .flatMap((item) => processTestQuestion(item, fallbackPages, sourceByPage))
     .filter((question, index, questions) => questions.findIndex(
       (candidate) => normalizeEvidenceText(candidate.question) === normalizeEvidenceText(question.question),
     ) === index)
@@ -447,8 +464,9 @@ function processSection(raw: unknown, heading: string, sourceByPage: Map<number,
   const sourcePages = [...new Set([
     ...paragraphs.flatMap((item) => item.sourcePages),
     ...visuals.flatMap((visual) => visual.sourcePages),
+    ...fallbackPages,
   ])].sort((first, second) => first - second);
-  if (!heading.trim() || !paragraphs.length || !sourcePages.length) return null;
+  if (!paragraphs.length) return null;
 
   return {
     heading: heading.trim(),
@@ -461,31 +479,20 @@ function processSection(raw: unknown, heading: string, sourceByPage: Map<number,
   };
 }
 
-function processFlashcard(item: unknown, sourceByPage: Map<number, string>): StudyFlashcard[] {
-  if (
-    typeof item !== "object" || item === null || !("question" in item) || !("answer" in item) || !("sourcePages" in item)
-  ) return [];
-  const card = item as { question: unknown; answer: unknown; sourcePages: unknown; evidence?: unknown };
-  if (typeof card.question !== "string" || typeof card.answer !== "string" || !Array.isArray(card.sourcePages)) return [];
-
-  // A card is kept when its evidence quote verifies against the PDF text. We prefer the model's
-  // own sourcePages when they line up with the verified pages, but fall back to the verified
-  // pages so a card is not dropped just because its separate sourcePages field disagrees.
-  const evidencePages = verifiedEvidencePages(card.evidence, sourceByPage);
-  if (!evidencePages.length) return [];
-  const matchedPages = [...new Set(card.sourcePages.filter(
-    (pageNumber): pageNumber is number => typeof pageNumber === "number" && Number.isInteger(pageNumber) && evidencePages.includes(pageNumber),
-  ))].sort((first, second) => first - second);
-  const sourcePages = matchedPages.length ? matchedPages : evidencePages;
+function processFlashcard(item: unknown, fallbackPages: number[], sourceByPage: Map<number, string>): StudyFlashcard[] {
+  if (typeof item !== "object" || item === null || !("question" in item) || !("answer" in item)) return [];
+  const card = item as { question: unknown; answer: unknown; sourcePages?: unknown; evidence?: unknown };
+  if (typeof card.question !== "string" || typeof card.answer !== "string") return [];
   if (
     card.question.trim().length < 8 || card.answer.trim().length < 3 ||
     card.question.length > 260 || card.answer.length > 500
   ) return [];
 
+  const sourcePages = resolvePages(card.evidence, card.sourcePages, fallbackPages, sourceByPage);
   return [{ question: card.question.trim(), answer: card.answer.trim(), sourcePages }];
 }
 
-function processTestQuestion(item: unknown, sourceByPage: Map<number, string>): QuickTestQuestion[] {
+function processTestQuestion(item: unknown, fallbackPages: number[], sourceByPage: Map<number, string>): QuickTestQuestion[] {
   if (typeof item !== "object" || item === null) return [];
   const question = item as {
     topic?: unknown; concept?: unknown; difficulty?: unknown; question?: unknown; options?: unknown;
@@ -497,27 +504,20 @@ function processTestQuestion(item: unknown, sourceByPage: Map<number, string>): 
     typeof question.question !== "string" || !Array.isArray(question.options) ||
     !question.options.every((option) => typeof option === "string") || question.options.length !== 4 ||
     typeof question.correctAnswer !== "number" || !Number.isInteger(question.correctAnswer) ||
-    question.correctAnswer < 0 || question.correctAnswer > 3 || typeof question.explanation !== "string" ||
-    !Array.isArray(question.sourcePages)
+    question.correctAnswer < 0 || question.correctAnswer > 3 || typeof question.explanation !== "string"
   ) return [];
 
-  // Keep a question when its own evidence quote verifies against the PDF text. The explanation's
-  // quote is a bonus (it adds pages when present) but is not required, so a solid question is not
-  // dropped just because the explanation quote didn't match exactly. Fall back to the verified
-  // pages when the model's separate sourcePages field disagrees.
-  const questionPages = verifiedEvidencePages(question.questionEvidence, sourceByPage);
-  const explanationPages = verifiedEvidencePages(question.explanationEvidence, sourceByPage);
-  const evidencePages = [...new Set([...questionPages, ...explanationPages])].sort((first, second) => first - second);
-  const matchedPages = [...new Set(question.sourcePages.filter(
-    (pageNumber): pageNumber is number => typeof pageNumber === "number" && Number.isInteger(pageNumber) && evidencePages.includes(pageNumber),
-  ))].sort((first, second) => first - second);
-  const sourcePages = matchedPages.length ? matchedPages : evidencePages;
+  const sourcePages = resolvePages(
+    [...(Array.isArray(question.questionEvidence) ? question.questionEvidence : []), ...(Array.isArray(question.explanationEvidence) ? question.explanationEvidence : [])],
+    question.sourcePages,
+    fallbackPages,
+    sourceByPage,
+  );
   const options = question.options.map((option) => option.trim());
 
   if (
     !question.topic.trim() || !question.concept.trim() || !question.question.trim() ||
     !question.explanation.trim() || question.question.length > 500 || question.explanation.length > 800 ||
-    !questionPages.length || !sourcePages.length ||
     options.some((option) => !option) || new Set(options.map(normalizeEvidenceText)).size !== 4
   ) return [];
 
@@ -715,7 +715,7 @@ export async function POST(request: Request) {
           const raw = await requestGeminiJson(
             models, apiKey, BASE_RULES, makeParts(moduleTask(stub.heading, stub.focus, stub.sourcePages)), moduleSchema, 32_768,
           );
-          const section = processSection(raw, stub.heading, sourceByPage);
+          const section = processSection(raw, stub.heading, stub.sourcePages, sourceByPage);
           if (section) return section;
         } catch (error) {
           if (error instanceof GeminiFailure) moduleFailure = error;
@@ -743,10 +743,9 @@ export async function POST(request: Request) {
       .slice(0, 10);
 
     const rememberThis = outline.rememberThis.flatMap((item) => {
-      if (typeof item !== "object" || item === null || !("text" in item) || !("evidence" in item)) return [];
-      const point = item as { text: unknown; evidence: unknown };
-      if (typeof point.text !== "string" || !point.text.trim()) return [];
-      return verifiedEvidencePages(point.evidence, sourceByPage).length ? [point.text.trim()] : [];
+      if (typeof item !== "object" || item === null || !("text" in item)) return [];
+      const point = item as { text: unknown };
+      return typeof point.text === "string" && point.text.trim() ? [point.text.trim()] : [];
     }).slice(0, 4);
 
     // Pass 3: the whole-packet quick test (five questions from the packet quiz/answer key).
@@ -756,7 +755,7 @@ export async function POST(request: Request) {
       const quick = quickRaw as { quickTestQuestions?: unknown };
       if (Array.isArray(quick.quickTestQuestions)) {
         const verified = quick.quickTestQuestions
-          .flatMap((item) => processTestQuestion(item, sourceByPage))
+          .flatMap((item) => processTestQuestion(item, [], sourceByPage))
           .filter((question, index, questions) => questions.findIndex(
             (candidate) => normalizeEvidenceText(candidate.concept) === normalizeEvidenceText(question.concept),
           ) === index)
