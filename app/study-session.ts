@@ -143,7 +143,7 @@ export function isLessonResult(value: unknown): value is LessonResult {
     isRecord(flashcard) && typeof flashcard.question === "string" && typeof flashcard.answer === "string" &&
     arePageNumbers(flashcard.sourcePages),
   );
-  const validQuestions = value.quickTestQuestions.length <= 5 && value.quickTestQuestions.every((item) =>
+  const validQuestions = (value.quickTestQuestions.length === 0 || value.quickTestQuestions.length === 5) && value.quickTestQuestions.every((item) =>
     isRecord(item) && typeof item.topic === "string" && typeof item.concept === "string" &&
     (item.difficulty === "easy" || item.difficulty === "medium" || item.difficulty === "challenging") &&
     typeof item.question === "string" && Array.isArray(item.options) && item.options.length === 4 &&
@@ -158,7 +158,8 @@ export function isLessonResult(value: unknown): value is LessonResult {
 export function isQuizSessionResult(value: unknown): value is QuizSessionResult {
   if (
     !isRecord(value) || typeof value.topic !== "string" || typeof value.score !== "number" ||
-    typeof value.totalQuestions !== "number" || !Array.isArray(value.correctAnswers) ||
+    !Number.isInteger(value.score) || value.score < 0 || value.score > 5 || value.totalQuestions !== 5 ||
+    !Array.isArray(value.correctAnswers) || value.correctAnswers.length !== 5 ||
     !Array.isArray(value.questionsToReview) || !Array.isArray(value.weakConcepts) ||
     !Array.isArray(value.missedQuestions)
   ) return false;
