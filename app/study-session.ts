@@ -49,6 +49,7 @@ export type QuizSessionResult = {
 export type LessonResult = {
   title: string;
   intro: string;
+  introSourcePages?: number[];
   sections: LessonSection[];
   rememberThis: string[];
   flashcards: StudyFlashcard[];
@@ -56,58 +57,50 @@ export type LessonResult = {
   insufficientInformation: boolean;
 };
 
-export type StudyMode = "lesson" | "test";
+export type StudyProgress = {
+  lessonCompletedAt: string | null;
+  flashcardsCompletedAt: string | null;
+  flashcardsKnown: number | null;
+  flashcardsReview: number | null;
+  testSubmittedAt: string | null;
+  testScore: number | null;
+  bestTestScore: number | null;
+  testAttempts: number;
+  weakConcepts: string[];
+  completedAt: string | null;
+};
 
-export const STUDY_SESSION_STORAGE_KEY = "pulse-notes-study-session";
-const STUDY_SESSION_EVENT = "pulse-notes-study-session-change";
+export type StudyPackage = {
+  id: string;
+  weekNumber: number;
+  title: string;
+  fileName: string;
+  status: string;
+  pdfUrl: string | null;
+  lesson: LessonResult;
+  progress: StudyProgress | null;
+};
 
-export function subscribeToStudySession(onChange: () => void) {
-  if (typeof window === "undefined") return () => {};
-  window.addEventListener(STUDY_SESSION_EVENT, onChange);
-  return () => window.removeEventListener(STUDY_SESSION_EVENT, onChange);
+// sessionStorage is only an offline convenience copy. Supabase is the source of truth.
+const CACHE_PREFIX = "pulse-notes-study-";
+
+export function cacheStudy(study: StudyPackage) {
+  try {
+    window.sessionStorage.setItem(`${CACHE_PREFIX}${study.id}`, JSON.stringify(study));
+  } catch {
+    /* ignore quota/private-mode errors */
+  }
 }
 
-export function getStudySessionSnapshot() {
-  if (typeof window === "undefined") return null;
+export function readCachedStudy(id: string): StudyPackage | null {
   try {
-    return window.sessionStorage.getItem(STUDY_SESSION_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(`${CACHE_PREFIX}${id}`);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) && isLessonResult(parsed.lesson) ? (parsed as StudyPackage) : null;
   } catch {
     return null;
   }
-}
-
-export function getServerStudySessionSnapshot() {
-  return null;
-}
-
-export function saveStudySession(
-  lesson: LessonResult,
-  mode: StudyMode = "lesson",
-  quizResult: QuizSessionResult | null = null,
-) {
-  window.sessionStorage.setItem(STUDY_SESSION_STORAGE_KEY, JSON.stringify({ lesson, mode, quizResult }));
-  window.dispatchEvent(new Event(STUDY_SESSION_EVENT));
-}
-
-export function setStudySessionMode(mode: StudyMode) {
-  const snapshot = getStudySessionSnapshot();
-  const lesson = restoreStudySession(snapshot);
-  if (lesson) saveStudySession(lesson, mode, restoreQuizResult(snapshot));
-}
-
-export function saveQuizResult(result: QuizSessionResult) {
-  const snapshot = getStudySessionSnapshot();
-  const lesson = restoreStudySession(snapshot);
-  if (lesson) saveStudySession(lesson, "test", result);
-}
-
-export function clearStudySession() {
-  try {
-    window.sessionStorage.removeItem(STUDY_SESSION_STORAGE_KEY);
-  } catch {
-    return;
-  }
-  window.dispatchEvent(new Event(STUDY_SESSION_EVENT));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -152,7 +145,9 @@ export function isLessonResult(value: unknown): value is LessonResult {
     typeof item.explanation === "string" && arePageNumbers(item.sourcePages),
   );
 
-  return validSections && validFlashcards && validQuestions && value.rememberThis.every((point) => typeof point === "string");
+  const validIntroPages = value.introSourcePages === undefined || arePageNumbers(value.introSourcePages);
+
+  return validIntroPages && validSections && validFlashcards && validQuestions && value.rememberThis.every((point) => typeof point === "string");
 }
 
 export function isQuizSessionResult(value: unknown): value is QuizSessionResult {
@@ -173,35 +168,4 @@ export function isQuizSessionResult(value: unknown): value is QuizSessionResult 
       typeof question.selectedAnswer === "string" && typeof question.correctAnswer === "string" &&
       typeof question.explanation === "string" && typeof question.concept === "string" && arePageNumbers(question.sourcePages),
     );
-}
-
-export function restoreStudySession(snapshot: string | null) {
-  if (!snapshot) return null;
-  try {
-    const parsed: unknown = JSON.parse(snapshot);
-    if (isLessonResult(parsed)) return parsed;
-    return isRecord(parsed) && isLessonResult(parsed.lesson) ? parsed.lesson : null;
-  } catch {
-    return null;
-  }
-}
-
-export function restoreQuizResult(snapshot: string | null) {
-  if (!snapshot) return null;
-  try {
-    const parsed: unknown = JSON.parse(snapshot);
-    return isRecord(parsed) && isQuizSessionResult(parsed.quizResult) ? parsed.quizResult : null;
-  } catch {
-    return null;
-  }
-}
-
-export function getStudySessionMode(snapshot: string | null): StudyMode {
-  if (!snapshot) return "lesson";
-  try {
-    const parsed: unknown = JSON.parse(snapshot);
-    return isRecord(parsed) && parsed.mode === "test" ? "test" : "lesson";
-  } catch {
-    return "lesson";
-  }
 }
