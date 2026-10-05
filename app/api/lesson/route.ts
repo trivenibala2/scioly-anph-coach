@@ -181,10 +181,11 @@ export async function POST(request: Request) {
     required: ["pageNumber", "quote"],
   };
 
+  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+
   try {
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const callGemini = () => fetch(geminiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(60_000),
@@ -287,12 +288,29 @@ export async function POST(request: Request) {
             },
           },
         }),
-      },
-    );
+    });
+
+    let geminiResponse = await callGemini();
+    // Retry once if Google says it is busy or briefly overloaded.
+    if (geminiResponse.status === 429 || geminiResponse.status === 503) {
+      await new Promise((resolve) => setTimeout(resolve, 8_000));
+      geminiResponse = await callGemini();
+    }
 
     if (!geminiResponse.ok) {
+      // Log Google's real reason (quota, bad key, overloaded...) for the server logs. Never logs the API key.
+      const detail = await geminiResponse.text().catch(() => "");
+      console.error(`Gemini ${model} returned ${geminiResponse.status}:`, detail.slice(0, 800));
       return Response.json(
-        { error: geminiResponse.status === 429 ? "The lesson service is busy. Wait a moment and try again." : "Gemini could not create a lesson. Check the server API key and try again." },
+        {
+          error: geminiResponse.status === 429
+            ? "The lesson service is busy or the Gemini quota is used up. Wait a minute and try again; if it keeps happening, check your Gemini API usage limits."
+            : geminiResponse.status === 400 || geminiResponse.status === 403
+              ? "Gemini rejected the request. Check that GEMINI_API_KEY is valid and that billing or access is enabled for it."
+              : geminiResponse.status === 404
+                ? `The Gemini model "${model}" was not found. Set GEMINI_MODEL to an available model.`
+                : "Gemini could not create a lesson. Please try again.",
+        },
         { status: geminiResponse.status === 429 ? 429 : 502 },
       );
     }
