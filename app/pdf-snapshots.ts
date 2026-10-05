@@ -56,7 +56,9 @@ export async function renderCitedPages(fileBytes: ArrayBuffer, pageNumbers: numb
       if (pageNumber < 1 || pageNumber > document.numPages) continue;
       const page = await document.getPage(pageNumber);
       const originalViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(1, 720 / originalViewport.width, 880 / originalViewport.height);
+      // Rendered larger than the thumbnail size so the click-to-zoom view stays sharp;
+      // the in-page thumbnail is downscaled with CSS.
+      const scale = Math.min(2.2, 1600 / originalViewport.width, 2000 / originalViewport.height);
       const viewport = page.getViewport({ scale });
       const canvas = window.document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width);

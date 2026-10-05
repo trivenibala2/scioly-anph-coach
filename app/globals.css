@@ -2650,3 +2650,103 @@ h1 {
 .source-visuals-lead {
   margin: 16px 0 20px;
 }
+
+/* Packet diagram zoom */
+.zoom-hint {
+  color: #9aa8a1;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.source-visual-button {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid #e2ebe5;
+  border-radius: 8px;
+  background: #fff;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.source-visual-button:hover {
+  border-color: #4d7663;
+}
+
+.source-visual-button img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.source-visual-zoom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(36, 91, 67, 0.85);
+  color: #fff;
+}
+
+.diagram-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(18, 32, 26, 0.82);
+  cursor: zoom-out;
+}
+
+.diagram-lightbox-figure {
+  margin: 0;
+  max-width: 95vw;
+  max-height: 92vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px;
+  cursor: default;
+}
+
+.diagram-lightbox-figure img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-lightbox-figure figcaption {
+  margin-top: 8px;
+  text-align: center;
+  color: #6b7a72;
+  font-size: 12px;
+}
+
+.diagram-lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: #245b43;
+  cursor: pointer;
+}
+
+.diagram-lightbox-close:hover {
+  background: #fff;
+}

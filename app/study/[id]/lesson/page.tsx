@@ -23,8 +23,9 @@ export default function LessonPage() {
       ...new Set([
         ...(lesson.introSourcePages ?? []),
         ...lesson.sections.flatMap((section) => section.sourcePages),
+        ...(lesson.visuals ?? []).flatMap((visual) => visual.sourcePages),
       ]),
-    ].slice(0, 20);
+    ].slice(0, 40);
     void fetch(pdfUrl)
       .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error("PDF unavailable"))))
       .then((bytes) => renderCitedPages(bytes, cited))

@@ -13,6 +13,7 @@ import {
   Brain,
   ClipboardCheck,
   FileText,
+  ZoomIn,
   X,
 } from "lucide-react";
 import type { LessonResult, StudyFlashcard, QuickTestQuestion } from "../study-session";
@@ -292,6 +293,7 @@ export function PaginatedLesson({
 }: PaginatedLessonProps) {
   const [currentPage, setCurrentPage] = useState(0);
   const [sectionView, setSectionView] = useState<SectionView>("content");
+  const [zoomedPage, setZoomedPage] = useState<PageSnapshot | null>(null);
 
   // Total pages: intro + sections + summary (Remember This)
   const totalPages = 1 + lesson.sections.length + (lesson.rememberThis.length > 0 ? 1 : 0);
@@ -393,7 +395,7 @@ export function PaginatedLesson({
             ) && (
               <div className="source-visuals source-visuals-lead">
                 <div className="visual-heading">
-                  <ImageIcon size={14} /> Diagrams from your packet
+                  <ImageIcon size={14} /> Diagrams from your packet <span className="zoom-hint">· tap to zoom</span>
                 </div>
                 <div className="visual-grid">
                   {diagramPagesFor(currentSection.sourcePages)
@@ -402,13 +404,21 @@ export function PaginatedLesson({
                       const snapshot = pageSnapshots.find((item) => item.pageNumber === pageNumber);
                       return snapshot ? (
                         <figure className="source-visual" key={pageNumber}>
-                          <Image
-                            src={snapshot.dataUrl}
-                            alt={`Uploaded PDF page ${pageNumber}`}
-                            width={snapshot.width}
-                            height={snapshot.height}
-                            unoptimized
-                          />
+                          <button
+                            type="button"
+                            className="source-visual-button"
+                            onClick={() => setZoomedPage(snapshot)}
+                            aria-label={`Zoom in on PDF page ${pageNumber}`}
+                          >
+                            <Image
+                              src={snapshot.dataUrl}
+                              alt={`Uploaded PDF page ${pageNumber}`}
+                              width={snapshot.width}
+                              height={snapshot.height}
+                              unoptimized
+                            />
+                            <span className="source-visual-zoom"><ZoomIn size={16} /></span>
+                          </button>
                           <figcaption>PDF page {pageNumber}</figcaption>
                         </figure>
                       ) : null;
@@ -564,6 +574,30 @@ export function PaginatedLesson({
           </button>
         </div>
       </div>
+
+      {zoomedPage && (
+        <div
+          className="diagram-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`PDF page ${zoomedPage.pageNumber}, enlarged`}
+          onClick={() => setZoomedPage(null)}
+        >
+          <button className="diagram-lightbox-close" type="button" onClick={() => setZoomedPage(null)} aria-label="Close">
+            <X size={22} />
+          </button>
+          <figure className="diagram-lightbox-figure" onClick={(event) => event.stopPropagation()}>
+            <Image
+              src={zoomedPage.dataUrl}
+              alt={`Uploaded PDF page ${zoomedPage.pageNumber}, enlarged`}
+              width={zoomedPage.width}
+              height={zoomedPage.height}
+              unoptimized
+            />
+            <figcaption>PDF page {zoomedPage.pageNumber}</figcaption>
+          </figure>
+        </div>
+      )}
     </div>
   );
 }
