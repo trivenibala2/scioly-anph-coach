@@ -181,14 +181,17 @@ export async function POST(request: Request) {
     required: ["pageNumber", "quote"],
   };
 
-  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  // GEMINI_MODEL may be one model or a comma-separated fallback list, tried in order.
+  const models = (process.env.GEMINI_MODEL?.split(",") ?? [])
+    .map((name: string) => name.trim())
+    .filter(Boolean);
+  if (models.length === 0) models.push("gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite");
 
   try {
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const callGemini = () => fetch(geminiUrl, {
+    const callGemini = (model: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(110_000),
         body: JSON.stringify({
           systemInstruction: {
             parts: [{
@@ -290,29 +293,44 @@ export async function POST(request: Request) {
         }),
     });
 
-    let geminiResponse = await callGemini();
-    // Retry once if Google says it is busy or briefly overloaded.
-    if (geminiResponse.status === 429 || geminiResponse.status === 503) {
-      await new Promise((resolve) => setTimeout(resolve, 8_000));
-      geminiResponse = await callGemini();
+    // Try each model in order. Overloaded (503/500) and rate-limited (429) answers are retried
+    // with a short wait; an unknown model (404) moves on to the next one. 400/403 stop at once.
+    const startedAt = Date.now();
+    let geminiResponse: Response | null = null;
+    let lastStatus = 0;
+    let lastModel = models[0];
+
+    outer: for (const model of models) {
+      lastModel = model;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (Date.now() - startedAt > 150_000) break outer;
+        const response = await callGemini(model).catch((fetchError: unknown) => {
+          console.error(`Gemini ${model} request failed:`, fetchError instanceof Error ? fetchError.message : "unknown");
+          return null;
+        });
+        if (!response) { lastStatus = 0; break; }
+        lastStatus = response.status;
+        if (response.ok) { geminiResponse = response; break outer; }
+
+        const detail = await response.text().catch(() => "");
+        console.error(`Gemini ${model} returned ${response.status}:`, detail.slice(0, 800));
+        if (response.status === 400 || response.status === 401 || response.status === 403) break outer;
+        if (response.status === 404) break;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 4_000 * (attempt + 1)));
+      }
     }
 
-    if (!geminiResponse.ok) {
-      // Log Google's real reason (quota, bad key, overloaded...) for the server logs. Never logs the API key.
-      const detail = await geminiResponse.text().catch(() => "");
-      console.error(`Gemini ${model} returned ${geminiResponse.status}:`, detail.slice(0, 800));
-      return Response.json(
-        {
-          error: geminiResponse.status === 429
-            ? "The lesson service is busy or the Gemini quota is used up. Wait a minute and try again; if it keeps happening, check your Gemini API usage limits."
-            : geminiResponse.status === 400 || geminiResponse.status === 403
-              ? "Gemini rejected the request. Check that GEMINI_API_KEY is valid and that billing or access is enabled for it."
-              : geminiResponse.status === 404
-                ? `The Gemini model "${model}" was not found. Set GEMINI_MODEL to an available model.`
-                : "Gemini could not create a lesson. Please try again.",
-        },
-        { status: geminiResponse.status === 429 ? 429 : 502 },
-      );
+    if (!geminiResponse) {
+      const message = lastStatus === 429
+        ? "The Gemini quota is used up or the service is busy. Wait a minute and try again, or check your Gemini API usage limits."
+        : lastStatus === 400 || lastStatus === 401 || lastStatus === 403
+          ? "Gemini rejected the request. Check that GEMINI_API_KEY is valid and that access or billing is enabled for it."
+          : lastStatus === 404
+            ? `None of these Gemini models were found: ${models.join(", ")}. Set GEMINI_MODEL to an available model.`
+            : lastStatus === 503 || lastStatus === 500
+              ? `Gemini is overloaded right now (HTTP ${lastStatus} on ${lastModel}). Wait a few minutes and try again, or add a second model to GEMINI_MODEL, e.g. "gemini-3.8-flash,gemini-3.5-flash-lite".`
+              : `Gemini did not answer (last status ${lastStatus || "no response"} on ${lastModel}). Please try again.`;
+      return Response.json({ error: message }, { status: lastStatus === 429 ? 429 : 502 });
     }
 
     const result = await geminiResponse.json() as GeminiResponse;
@@ -479,6 +497,14 @@ export async function POST(request: Request) {
       "A&P lesson generation failed:",
       caughtError instanceof Error ? caughtError.message : "Unknown response error",
     );
-    return Response.json({ error: "We couldn’t create a lesson just now. Please try again." }, { status: 502 });
+    // This route is admin-only, so it is safe to say what actually went wrong (no secrets are included).
+    const reason = caughtError instanceof Error && (caughtError.name === "TimeoutError" || caughtError.name === "AbortError")
+      ? "Gemini took too long to answer. Try a shorter PDF or try again."
+      : caughtError instanceof SyntaxError
+        ? "Gemini returned malformed JSON (the answer may have been cut off). Try again, or try a shorter PDF."
+        : caughtError instanceof Error
+          ? caughtError.message
+          : "Unknown error.";
+    return Response.json({ error: `We couldn’t create a lesson: ${reason}` }, { status: 502 });
   }
 }
