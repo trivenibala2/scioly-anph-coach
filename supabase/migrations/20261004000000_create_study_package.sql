@@ -48,6 +48,21 @@ create table if not exists public.tests (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.student_week_progress (
+  id uuid primary key default gen_random_uuid(),
+  student_username text not null,
+  study_week_id uuid not null references public.study_weeks(id) on delete cascade,
+  lesson_completed_at timestamptz,
+  flashcards_completed_at timestamptz,
+  test_submitted_at timestamptz,
+  test_score smallint check (test_score between 0 and 5),
+  completed_at timestamptz,
+  unlocks_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (student_username, study_week_id)
+);
+
 create index if not exists study_weeks_status_number_idx
   on public.study_weeks (status, week_number);
 create index if not exists study_materials_study_week_id_idx
@@ -58,9 +73,10 @@ alter table public.study_materials enable row level security;
 alter table public.lessons enable row level security;
 alter table public.flashcard_decks enable row level security;
 alter table public.tests enable row level security;
+alter table public.student_week_progress enable row level security;
 
-revoke all on public.study_weeks, public.study_materials, public.lessons, public.flashcard_decks, public.tests from anon, authenticated;
-grant all on public.study_weeks, public.study_materials, public.lessons, public.flashcard_decks, public.tests to service_role;
+revoke all on public.study_weeks, public.study_materials, public.lessons, public.flashcard_decks, public.tests, public.student_week_progress from anon, authenticated;
+grant all on public.study_weeks, public.study_materials, public.lessons, public.flashcard_decks, public.tests, public.student_week_progress to service_role;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('study-materials', 'study-materials', false, 20971520, array['application/pdf'])
