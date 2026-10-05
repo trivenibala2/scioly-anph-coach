@@ -1,7 +1,6 @@
 import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
 
 export type AccountRole = "admin" | "student";
 export type AuthenticatedAccount = { username: string; role: AccountRole };
@@ -17,6 +16,10 @@ function configuredAccounts() {
   ].filter((account): account is { username: string; password: string; role: AccountRole } =>
     Boolean(account.username && account.password),
   );
+}
+
+export function listStudentUsernames() {
+  return configuredAccounts().filter((account) => account.role === "student").map((account) => account.username);
 }
 
 function sessionSecret() {
@@ -79,12 +82,6 @@ export function getAccountFromRequest(request: Request): AuthenticatedAccount | 
   } catch {
     return null;
   }
-}
-
-export async function getAccountFromCookies() {
-  const cookieStore = await cookies();
-  const request = new Request("http://internal", { headers: { cookie: cookieStore.toString() } });
-  return getAccountFromRequest(request);
 }
 
 export function requireAccount(request: Request, role?: AccountRole) {

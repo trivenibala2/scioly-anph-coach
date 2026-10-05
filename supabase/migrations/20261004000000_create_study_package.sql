@@ -20,8 +20,6 @@ create table if not exists public.study_materials (
   file_name text not null,
   file_path text not null unique,
   extracted_text text,
-  extracted_pages jsonb not null default '[]'::jsonb
-    check (jsonb_typeof(extracted_pages) = 'array'),
   status text not null default 'uploaded'
     check (status in ('uploaded', 'processing', 'ready', 'error')),
   error_message text,
